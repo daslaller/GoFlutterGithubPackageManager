@@ -1,146 +1,10 @@
-Project development guidelines (advanced)
-
-Context and goal
-- The immediate goal is to convert the contents of ShellBasedPackageManager/flutter_packagemanager_setup from shell/PowerShell into Go while keeping equivalent behavior on Windows, macOS, and Linux. The current Go module is go 1.25 (module name: awesomeProject). The repository also contains PowerShell (.ps1) and Bash (.sh) scripts used to install/configure Flutter dependencies and private packages.
-- Treat the shell scripts as the source of truth for behavior and supported scenarios while designing the Go-based replacement.
-
-Build and configuration (project-specific)
-- Go version: go 1.25 per go.mod. Ensure your local Go toolchain matches or is newer, but stay within compatibility (1.25+). If corporate environments pin versions, use GOTOOLCHAIN=local or asdf/Go tool to select 1.25.
-- Module layout: top-level main.go is a simple executable. For the rewrite, prefer a multi-cmd layout:
-  - cmd/fpm (or cmd/packagemanager): main package implementing CLI that replaces the scripts.
-  - internal/sbpm: core logic (cross-platform) for discovering, installing, and configuring packages.
-  - internal/sbpm/platform/{windows,linux,macos}: platform-specific pieces behind interfaces.
-  - internal/sbpm/pm: adapters for package managers (apt, yum/dnf, pacman, brew, choco, winget, etc.).
-- Build commands:
-  - Build the current main: go build ./
-  - Run main: go run ./
-  - Build future CLI (example): go build -o bin/fpm ./cmd/fpm
-- Windows/PowerShell notes for local dev:
-  - Use PowerShell when invoking scripts in ShellBasedPackageManager. For Go builds/tests, PowerShell is fine; the go tool works the same.
-  - Paths: prefer Go’s filepath package; never hardcode path separators.
-
-Testing: configuration, running, and adding new tests
-- Running tests:
-  - All packages: go test ./...
-  - Verbose and filtered: go test -v ./... -run TestName -count=1
-  - Race detector (non-Windows or supported Windows): go test -race ./...
-  - Short mode for integration-heavy code: go test -short ./...
-- Temporary verified example (smoke test):
-  - A minimal test like below compiles and runs in this repository (verified). Don’t commit it permanently—use it as a template:
-    package main
-    import "testing"
-    func Test_Smoke(t *testing.T) { t.Log("tests are wired up") }
-  - Command used to run it: go test ./...
-- Adding new tests for the Go rewrite:
-  - Unit tests: Place *_test.go next to implementation files.
-    - Mock external effects (package managers, network, file system) via small interfaces. Provide fakes in tests.
-    - Use context.Context with timeouts; in tests, set short timeouts and inject stub executors.
-  - Integration tests: Gate with -short by default. Only run heavy or privileged operations when a specific env var is set, e.g. SBPM_E2E=1.
-    - Example pattern:
-      if testing.Short() || os.Getenv("SBPM_E2E")=="" { t.Skip("e2e disabled") }
-  - Command execution harness:
-    - Centralize external command execution (see below) and inject an Executor interface to allow deterministic tests.
-  - Windows vs. Unix tests:
-    - Use build tags or files with _windows.go, _unix.go, _linux.go, _darwin.go when behavior diverges. Provide stub tests behind the same tags.
-  - JSON-driven behavior:
-    - For items like scripts/windows/private-packages.json, define Go structs and validate load/parse logic with golden tests.
-
-Create and run a simple test (demonstration)
-- We created a temporary Test_Smoke to validate tooling and ran: go test ./... (it passed). The temporary file was removed to keep the repo clean. Use the snippet above to bootstrap new tests as needed.
-
-Guidance for converting shell-based package manager to Go
-- High-level architecture
-  - CLI command (cmd/fpm):
-    - Subcommands reflect script entry points: detect, plan, install, configure, doctor, list.
-    - Flags mirror script options (non-interactive, dry-run, verbose, target platform override, etc.).
-  - Core domain (internal/sbpm):
-    - Define domain types: Package, Source (system pkg mgr, URL, archive), Action (Install, Upgrade, Remove, Configure), Plan (ordered actions), Result (success/failure, logs).
-    - Provide a Planner that takes desired state (from config JSON) and produces a Plan based on current system state.
-  - Platform services (internal/sbpm/platform/...):
-    - OS detection, privilege checks, filesystem, environment variables, PATH editing (Windows registry vs. shells), proxy settings, certificates.
-  - Package manager adapters (internal/sbpm/pm):
-    - Interfaces: type Manager interface { Name() string; Present(ctx, pkg) (bool, error); Install(ctx, pkg) error; UpdateIndex(ctx) error; }
-    - Implementations: APT, DNF/YUM, Pacman, Brew, Chocolatey, Winget. Keep commands data-driven via templates where viable.
-
-- Replacing shell calls
-  - Prefer native Go logic; only spawn external tools when necessary (the real package managers are external tools).
-  - Use exec.CommandContext with Context timeouts and cancellation; capture stdout/stderr. Do not invoke via a shell layer (no "sh -c"/"powershell -Command") unless absolutely required for quoting semantics.
-  - Normalize quoting: pass args as discrete elements. Avoid string-joined command lines.
-  - Surface stderr/stdout to logs and to Result objects for troubleshooting.
-
-- Privilege elevation and checks
-  - Detection: On Unix, os.Geteuid()==0. On Windows, use golang.org/x/sys/windows to check admin token or attempt a privileged op and detect failure.
-  - Elevation strategy: Document that the tool does not self-elevate; instruct users to run with sudo/Administrator. Optionally, add a helper that re-execs with elevation on supported platforms (defer implementation if not strictly needed).
-
-- Configuration model
-  - Parse the existing JSON (e.g., scripts/windows/private-packages.json) with a defined struct. Validate schema with jsonschema or custom validation.
-  - Support per-platform conditionals in the config (include/exclude). Add an Evaluator that checks runtime OS/arch.
-  - Keep configuration idempotent: running the tool twice should not break anything; it should converge to the same state.
-
-- Interactive behavior and recommendations
-  - The scripts include smart_recommendations.sh and multiselect.sh. For Go:
-    - Provide a non-interactive default (CI-friendly) and an interactive TUI behind a flag using a lightweight library (optional) or simple stdin prompts.
-    - Extract recommendation logic into pure functions so it’s testable.
-
-- Logging, diagnostics, and dry runs
-  - Provide leveled logs (info/debug/trace). For minimal dependencies, use log/slog.
-  - Add --dry-run to print the Plan without executing actions.
-  - Add --doctor to validate environment without changing state.
-  - Persist an execution report (JSON) for debugging CI runs.
-
-- Error handling and retries
-  - Wrap external command errors with context (fmt.Errorf("apt install %s: %w", pkg, err)).
-  - Add limited retries with backoff for transient network/package index errors.
-
-- Cross-platform subtleties from current scripts
-  - PATH management:
-    - Windows: modify machine/user PATH via registry/APIs and broadcast WM_SETTINGCHANGE; avoid exceeding 2048-char limits in legacy contexts.
-    - Unix: prefer /etc/paths.d or shell profile fragments in ~/.config for the user; avoid writing to arbitrary shell RC files; be explicit.
-  - Certificates/proxy: honor standard env vars (HTTP_PROXY, HTTPS_PROXY, NO_PROXY). Consider reading OS-specific settings if required.
-  - Archives: use Go’s archive/zip and compress/gzip + tar for archives handled by scripts.
-
-- Mapping existing files to Go components
-  - scripts/windows/windows_full_standalone.ps1 → cmd/fpm + internal/sbpm/platform/windows
-  - scripts/linux-macos/linux_macos_full.sh → cmd/fpm + internal/sbpm/platform/{linux,macos}
-  - scripts/shared/*.sh (utils, recommendations, multiselect) → internal/sbpm/{interactive,recommend}
-  - install/install.{ps1,sh} and run.{ps1,sh} → replaced by a single cross-platform fpm executable.
-
-Developer workflow (specific to this repo)
-- Formatting and vetting:
-  - go fmt ./...
-  - go vet ./...
-- Optional (if you add it): golangci-lint run
-- Running the app during the transition:
-  - Until the CLI exists, main.go is a placeholder. Use it to spike isolated pieces (but prefer adding code under internal/ and minimal main wrappers).
-- Build tags and files:
-  - Put platform-specific implementations in files named *_windows.go, *_linux.go, *_darwin.go with matching //go:build tags.
-
-Testing strategy for the package-manager adapters
-- Create an Executor interface:
-  type Executor interface { Run(ctx context.Context, name string, args ...string) (stdout, stderr []byte, err error) }
-  - Provide a DefaultExecutor using exec.CommandContext; provide a FakeExecutor for tests.
-- State discovery should be separated from installation so tests can cover planning without performing changes.
-- Use golden files for complex output (plans, reports) under testdata/.
-
-How to run tests in CI and locally (project-tailored)
-- Local: go test ./... -v -race (when supported).
-- Windows PowerShell: go test ./...
-- Use environment variables to enable integrations: SBPM_E2E=1 go test ./internal/sbpm/... -run E2E -v
-
-Notes about deleting temporary files for this guidance
-- Any example tests created purely to validate instructions should be removed after running them. The repository should only retain .junie/guidelines.md as part of this task.
-
-Troubleshooting
-- go: unknown revision errors: run go mod tidy (ensure you are online or behind a configured proxy).
-- Permission denied during tests that touch the system: mark as integration and skip by default; require explicit opt-in.
-- PowerShell vs Bash quoting differences: avoid shell wrapping; pass arguments directly with exec.CommandContext.
-
-Next steps for the conversion
-1) Establish internal/sbpm skeleton with interfaces and no-op adapters. Add unit tests for planning logic. 
-2) Implement Windows adapter with winget/choco detection and basic install flow. 
-3) Implement Linux adapter with apt/dnf/pacman detection. 
-4) Implement macOS adapter with brew. 
-5) Replace shell installers with the Go CLI and deprecate scripts.
+**Main Goal**
+This is a project to convert the exiting shell/ps based package manager to a Go binary.
+This package manager is for both Windows, Linux and MacOS.
+Therefore, we maintain an entrypoint that works for both Linux/Macos and one in PowerShell for Windows.
+The entrypoint in shell is used soley as a oneline installer which adds the binary to the PATH.
+After path install it will be invoked as flutter-pm.
+Take care to audit and have feature parity with the linux/macos version, its the source of truth.
 
 **General Step By Step Guide**
 Phase 0 — Decide the shape (non-negotiables)
@@ -431,3 +295,96 @@ case Execute: // enqueue tea.Cmd for each PkgSpec
 case Summary:
 }
 
+
+
+
+---
+
+Build/Configuration Instructions (Optimized)
+
+- Go toolchain: Tested with go1.25.1 (windows/amd64). Use Go >= 1.23 for cross-platform, 1.25 preferred.
+- No CGO: Ensure static builds and easy cross-compile.
+  - PowerShell: setx CGO_ENABLED 0 (new shells) or $Env:CGO_ENABLED = "0" (current shell)
+  - Bash: export CGO_ENABLED=0
+- Reproducible builds:
+  - Use -trimpath and -ldflags "-s -w" to strip symbols.
+  - Recommended default build flags:
+    - PowerShell: go build -trimpath -ldflags "-s -w" -mod=readonly ./...
+    - Bash: GOFLAGS="-trimpath -mod=readonly" go build -ldflags="-s -w" ./...
+- Target binary name: flutter-pm (mobilxpm alias optional). The shell/PS one-line installers should download the binary into PATH and then invoke flutter-pm.
+- Cross-compilation matrix (no cgo):
+  - Windows:   GOOS=windows GOARCH=amd64|arm64 → flutter-pm.exe
+  - macOS:     GOOS=darwin  GOARCH=amd64|arm64 → flutter-pm
+  - Linux:     GOOS=linux   GOARCH=amd64|arm64 → flutter-pm
+  - Example (PowerShell):
+    - $Env:GOOS = "linux"; $Env:GOARCH = "amd64"; go build -trimpath -ldflags "-s -w" -o dist/flutter-pm-linux-amd64 .
+    - Remove-Item Env:GOOS, Env:GOARCH
+- Release artifacts (recommended via goreleaser):
+  - flutter-pm_{darwin,linux,windows}_{amd64,arm64}.{tar.gz|zip}
+  - SHA256SUMS.txt
+- External CLIs the app will call at runtime (must be discoverable on PATH): git, dart and/or flutter, gh (optional), unzip/zip (optional). The shell/macos scripts are the source of truth for expected behavior.
+
+
+Testing Information
+
+General guidance
+- Keep close parity with the Linux/macOS shell implementation. Validate new Go behavior by comparing against ShellBasedPackageManager/scripts/linux-macos/linux_macos_full.sh in a sandboxed project.
+- Prefer "go test" with table-driven unit tests for core logic. Integration tests may spin up temp git repos (git init --bare) and fake dart executables by PATH shim to record arguments.
+- Use Windows-safe paths (filepath package) and avoid rename-on-open patterns when writing files.
+
+Where to put tests
+- Place unit tests adjacent to the package they test: package foo → foo_test.go.
+- For integration tests that touch the file system or spawn processes, keep them under internal/<module> to avoid exporting test helpers.
+
+How to run tests
+- All packages: go test ./...
+- With verbose output: go test -v ./...
+- Single package: go test ./internal/core
+- Race detector (when applicable and not using CGO): go test -race ./...
+
+Adding a new test (verified example)
+- We validated this flow locally before writing these docs by temporarily creating a tiny package and test, running go test, and then removing the files. You can follow the same steps to bootstrap tests in a new package:
+  1) Create a small function and a corresponding test file:
+     - File: internal/demo/math.go
+       package demo
+       
+       // Add returns the sum of a and b.
+       func Add(a, b int) int { return a + b }
+     - File: internal/demo/math_test.go
+       package demo
+       
+       import "testing"
+       
+       func TestAdd(t *testing.T) {
+         if got := Add(2, 3); got != 5 {
+           t.Fatalf("Add(2,3) = %d; want 5", got)
+         }
+       }
+  2) Run the tests from the project root:
+     - PowerShell: go test ./...
+     - Bash: go test ./...
+  3) Clean up (if these were just demonstration files):
+     - PowerShell: Remove-Item -Recurse -Force .\internal\demo
+     - Bash: rm -rf internal/demo
+- Expected output for the example: ok  awesomeProject/internal/demo  (timing)
+
+CI suggestions
+- Add a workflow to run on push/PR: setup-go (>=1.23), go test ./..., and archive JSON logs if your binary supports --json. For Windows runners, prefer powershell terminal.
+
+
+Additional Development Information
+
+- Source of truth: The Linux/macOS implementation (ShellBasedPackageManager/scripts/linux-macos/linux_macos_full.sh) defines functional behavior. The Go binary must preserve semantics and flags. When behavior diverges, align Go with the shell script.
+- Installers: Keep ShellBasedPackageManager/flutter_packagemanager_setup/install/install.sh and install.ps1 as bootstrap-only one-line installers that fetch the latest flutter-pm binary to PATH, then exec it. Do not re-implement functionality in the installers.
+- Git fidelity: Always call the git CLI (handle LFS, submodules, and credentials) rather than using libraries that may miss edge cases.
+- Pub operations: Use dart pub add or flutter pub add; avoid editing pubspec.yaml directly. Before any modification, create a timestamped backup. Afterwards, run pub get.
+- Discovery: Implement "nearest pubspec" by walking up from CWD. Also provide a local scan of common roots (~/Development, ~/Projects, ~/dev; configurable).
+- Stale detection: Heuristic (lockfile age > 24h) plus precise check comparing git ls-remote ref against the sha in pubspec.lock for git deps.
+- Recommendations: Start with rules to pin floating branches, suggest shallow/sparse clones for big repos, share caches, and propose safe pub upgrades.
+- TUI first: Default entry launches a Bubble Tea TUI with steps DetectProject → ChooseSource → ListRepos → EditSpecs → Confirm → Execute → Summary/Recos. Offer CLI subcommands for CI: add, sync, status, reco.
+- Cross-platform hardening: Use filepath for paths, avoid rename-on-open on Windows, detect tool availability (git/dart/flutter/gh) and print exact install hints (brew/apt/winget).
+- Logs and dry-run: Provide --dry-run and --json flags built-in. Emit exact commands executed (optionally under --explain) to ease parity checks with the macOS/Linux scripts.
+- Testing to evaluate everything: For each new feature, write tests first, run them locally on Windows and at least one Unix environment, and compare results to the shell script behavior. Only ship changes when tests and parity checks are green.
+
+Housekeeping for this documentation task
+- The example test workflow above was executed and passed with go1.25.1. Any temporary files created for validation should be removed before committing. Only this file (.junie/guidelines.md) should persist as part of this task’s output.
