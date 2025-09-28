@@ -1,5 +1,5 @@
 **Main Goal**
-This is a project to convert the exiting shell/ps based package manager to a Go binary.
+This is a project to convert the exiting shell/ps based package manager to a Go binary for the commandline which uses bubbletea for the UI.
 This package manager is for both Windows, Linux and MacOS.
 Therefore, we maintain an entrypoint that works for both Linux/Macos and one in PowerShell for Windows.
 The entrypoint in shell is used soley as a oneline installer which adds the binary to the PATH.
