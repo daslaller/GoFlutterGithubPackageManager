@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./flutter-pm.exe --version)",
+      "Bash(./flutter-pm.exe status)"
+    ],
+    "defaultMode": "acceptEdits"
+  }
+}
