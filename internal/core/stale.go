@@ -1,11 +1,14 @@
 package core
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -28,8 +31,14 @@ func CheckStaleHeuristic(projectPath string) (bool, string, error) {
 	return age > staleThreshold, lockPath, nil
 }
 
-// CheckStalePrecise performs precise stale checking by comparing lock file SHAs with upstream
+// CheckStalePrecise performs precise stale checking with intelligent caching
 func CheckStalePrecise(logger *Logger, projectPath string) ([]StaleInfo, error) {
+	// Check cache first
+	if cached := staleCache.Get(projectPath); cached != nil {
+		logger.Debug("stale", "Using cached stale check results")
+		return cached, nil
+	}
+
 	lockPath := filepath.Join(projectPath, "pubspec.lock")
 
 	// Parse pubspec.lock
@@ -75,7 +84,7 @@ func CheckStalePrecise(logger *Logger, projectPath string) ([]StaleInfo, error) 
 
 		logger.Debug("stale", fmt.Sprintf("Checking %s at %s#%s", name, url, ref))
 
-		// Get upstream SHA
+		// Get upstream SHA (this uses its own caching via GitLsRemote)
 		upstreamSHA, err := GitLsRemote(url, ref)
 		if err != nil {
 			logger.Debug("stale", fmt.Sprintf("Failed to get upstream SHA for %s: %v", name, err))
@@ -108,27 +117,81 @@ func CheckStalePrecise(logger *Logger, projectPath string) ([]StaleInfo, error) 
 		}
 	}
 
+	// Cache the results
+	staleCache.Set(projectPath, staleInfo)
+
 	return staleInfo, nil
 }
 
-// parsePubspecLock parses the pubspec.lock file and extracts dependency information
+// Buffer pool for file I/O operations
+var (
+	bufferPool = sync.Pool{
+		New: func() interface{} {
+			return make([]byte, 8192) // 8KB buffer
+		},
+	}
+	readerPool = sync.Pool{
+		New: func() interface{} {
+			return bufio.NewReaderSize(nil, 8192)
+		},
+	}
+)
+
+// StaleCheckCache provides intelligent caching for stale dependency checks
+type StaleCheckCache struct {
+	mu    sync.RWMutex
+	cache map[string]CachedStaleInfo
+	ttl   time.Duration
+}
+
+// CachedStaleInfo represents cached stale information with expiry
+type CachedStaleInfo struct {
+	Info   []StaleInfo
+	Expiry time.Time
+	Hash   string // Hash of pubspec.yaml + pubspec.lock for invalidation
+}
+
+var (
+	staleCache = &StaleCheckCache{
+		cache: make(map[string]CachedStaleInfo),
+		ttl:   10 * time.Minute, // Cache for 10 minutes
+	}
+)
+
+// parsePubspecLock parses the pubspec.lock file with optimized I/O
 func parsePubspecLock(lockPath string) (*PubspecLock, error) {
-	content, err := os.ReadFile(lockPath)
+	file, err := os.Open(lockPath)
 	if err != nil {
 		return nil, err
 	}
+	defer file.Close()
+
+	// Get a buffered reader from pool
+	reader := readerPool.Get().(*bufio.Reader)
+	defer readerPool.Put(reader)
+	reader.Reset(file)
 
 	// Parse YAML-like structure (simplified parser for our needs)
 	lock := &PubspecLock{
 		Dependencies: make(map[string]PubspecLockDep),
 	}
 
-	lines := strings.Split(string(content), "\n")
 	inPackages := false
 	currentPkg := ""
 	currentDep := PubspecLockDep{}
 
-	for _, line := range lines {
+	// Read line by line using buffered reader for better performance
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+
+		// Remove newline
+		line = strings.TrimSuffix(line, "\n")
 		trimmed := strings.TrimSpace(line)
 
 		if trimmed == "packages:" {
@@ -170,6 +233,74 @@ func parsePubspecLock(lockPath string) (*PubspecLock, error) {
 	}
 
 	return lock, nil
+}
+
+// Get returns cached stale info if still valid
+func (c *StaleCheckCache) Get(projectPath string) []StaleInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	cached, exists := c.cache[projectPath]
+	if !exists || time.Now().After(cached.Expiry) {
+		return nil
+	}
+
+	// Check if files have changed by comparing hash
+	currentHash := c.generateProjectHash(projectPath)
+	if currentHash != cached.Hash {
+		return nil
+	}
+
+	return cached.Info
+}
+
+// Set caches the stale info with expiry
+func (c *StaleCheckCache) Set(projectPath string, info []StaleInfo) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	hash := c.generateProjectHash(projectPath)
+	c.cache[projectPath] = CachedStaleInfo{
+		Info:   info,
+		Expiry: time.Now().Add(c.ttl),
+		Hash:   hash,
+	}
+
+	// Start cleanup timer
+	go c.cleanupAfterTTL(projectPath)
+}
+
+// generateProjectHash creates a hash of pubspec files for cache invalidation
+func (c *StaleCheckCache) generateProjectHash(projectPath string) string {
+	pubspecPath := filepath.Join(projectPath, "pubspec.yaml")
+	lockPath := filepath.Join(projectPath, "pubspec.lock")
+
+	var hashBuilder strings.Builder
+
+	// Include modification times of both files
+	if info, err := os.Stat(pubspecPath); err == nil {
+		hashBuilder.WriteString(info.ModTime().Format(time.RFC3339Nano))
+	}
+	if info, err := os.Stat(lockPath); err == nil {
+		hashBuilder.WriteString(info.ModTime().Format(time.RFC3339Nano))
+	}
+
+	return hashBuilder.String()
+}
+
+// cleanupAfterTTL removes cache entry after TTL expires
+func (c *StaleCheckCache) cleanupAfterTTL(projectPath string) {
+	time.Sleep(c.ttl + time.Minute) // Extra minute buffer
+	c.mu.Lock()
+	delete(c.cache, projectPath)
+	c.mu.Unlock()
+}
+
+// InvalidateProject removes cached data for a specific project
+func (c *StaleCheckCache) InvalidateProject(projectPath string) {
+	c.mu.Lock()
+	delete(c.cache, projectPath)
+	c.mu.Unlock()
 }
 
 // extractValue extracts the value from a YAML line like "key: value"
@@ -287,4 +418,216 @@ func ExpressGitUpdate(logger *Logger, cfg *Config, projectPath string) ActionRes
 
 	// Update stale packages
 	return UpdateStaleDependencies(logger, cfg, projectPath, stalePackages)
+}
+
+// CheckSelfUpdate checks for Flutter-PM updates
+func CheckSelfUpdate(logger *Logger, cfg *Config) ActionResult {
+	logger.Info("selfupdate", "Checking for Flutter-PM updates...")
+
+	if cfg.DryRun {
+		return ActionResult{
+			OK:      true,
+			Message: "Would check for Flutter-PM updates",
+			Logs:    []string{"DRY RUN: git fetch origin main"},
+		}
+	}
+
+	// Try to find git repository root
+	execPath, err := os.Executable()
+	if err != nil {
+		return ActionResult{
+			OK:  false,
+			Err: fmt.Sprintf("could not determine executable path: %v", err),
+		}
+	}
+
+	// Look for .git directory up the tree
+	dir := filepath.Dir(execPath)
+	var repoRoot string
+	for {
+		gitDir := filepath.Join(dir, ".git")
+		if _, err := os.Stat(gitDir); err == nil {
+			repoRoot = dir
+			break
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break // reached root
+		}
+		dir = parent
+	}
+
+	if repoRoot == "" {
+		return ActionResult{
+			OK:      true,
+			Message: "Not a git repository - please reinstall Flutter Package Manager",
+		}
+	}
+
+	// Check git status and fetch updates
+	cmd := exec.Command("git", "fetch", "origin", "main")
+	cmd.Dir = repoRoot
+	output, err := cmd.CombinedOutput()
+	logs := []string{strings.TrimSpace(string(output))}
+
+	if err != nil {
+		return ActionResult{
+			OK:   false,
+			Err:  fmt.Sprintf("git fetch failed: %v", err),
+			Logs: logs,
+		}
+	}
+
+	// Check if updates are available
+	cmd = exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = repoRoot
+	currentCommit, err := cmd.Output()
+	if err != nil {
+		return ActionResult{
+			OK:   false,
+			Err:  fmt.Sprintf("could not get current commit: %v", err),
+			Logs: logs,
+		}
+	}
+
+	cmd = exec.Command("git", "rev-parse", "origin/main")
+	cmd.Dir = repoRoot
+	latestCommit, err := cmd.Output()
+	if err != nil {
+		return ActionResult{
+			OK:   false,
+			Err:  fmt.Sprintf("could not get latest commit: %v", err),
+			Logs: logs,
+		}
+	}
+
+	currentSHA := strings.TrimSpace(string(currentCommit))
+	latestSHA := strings.TrimSpace(string(latestCommit))
+
+	if currentSHA == latestSHA {
+		return ActionResult{
+			OK:      true,
+			Message: "Flutter Package Manager is already up to date",
+			Logs:    logs,
+		}
+	}
+
+	// Updates available - perform update
+	cmd = exec.Command("git", "reset", "--hard", "origin/main")
+	cmd.Dir = repoRoot
+	updateOutput, err := cmd.CombinedOutput()
+	logs = append(logs, strings.TrimSpace(string(updateOutput)))
+
+	if err != nil {
+		return ActionResult{
+			OK:   false,
+			Err:  fmt.Sprintf("update failed: %v", err),
+			Logs: logs,
+		}
+	}
+
+	return ActionResult{
+		OK:      true,
+		Message: "Flutter Package Manager updated successfully - restart recommended",
+		Logs:    logs,
+	}
+}
+
+// NuclearCacheUpdate performs nuclear cache clearing + update (remove pubspec.lock + clear pub cache)
+func NuclearCacheUpdate(logger *Logger, cfg *Config, projectPath string) ActionResult {
+	logger.Info("nuclear", "Starting nuclear cache update (remove pubspec.lock + clear pub cache)")
+
+	// Create backup first
+	backupInfo, err := CreateBackup(projectPath)
+	if err != nil {
+		logger.Error("backup", err)
+	} else {
+		logger.Info("backup", fmt.Sprintf("Created backup: %s", backupInfo.BackupPath))
+	}
+
+	var logs []string
+
+	// Step 1: Remove pubspec.lock
+	lockPath := filepath.Join(projectPath, "pubspec.lock")
+	if _, err := os.Stat(lockPath); err == nil {
+		if cfg.DryRun {
+			logs = append(logs, "DRY RUN: would remove pubspec.lock")
+		} else {
+			if err := os.Remove(lockPath); err != nil {
+				return ActionResult{
+					OK:   false,
+					Err:  fmt.Sprintf("failed to remove pubspec.lock: %v", err),
+					Logs: logs,
+				}
+			}
+			logs = append(logs, "Removed pubspec.lock")
+			logger.Info("nuclear", "Removed pubspec.lock")
+		}
+	} else {
+		logs = append(logs, "pubspec.lock not found (already clean)")
+	}
+
+	// Step 2: Clear pub cache
+	tool, err := FindPubTool()
+	if err != nil {
+		return ActionResult{
+			OK:   false,
+			Err:  fmt.Sprintf("pub tool not found: %v", err),
+			Logs: logs,
+		}
+	}
+
+	cacheArgs := []string{"pub", "cache", "clean"}
+	logger.LogCommand("nuclear", tool, cacheArgs)
+
+	if cfg.DryRun {
+		logs = append(logs, fmt.Sprintf("DRY RUN: %s %s", tool, strings.Join(cacheArgs, " ")))
+	} else {
+		cmd := exec.Command(tool, cacheArgs...)
+		output, err := cmd.CombinedOutput()
+		cacheOutput := strings.TrimSpace(string(output))
+		logs = append(logs, cacheOutput)
+
+		if err != nil {
+			logger.Error("nuclear", fmt.Errorf("pub cache clean failed: %v", err))
+			// Continue anyway - this is not critical
+			logs = append(logs, "Warning: pub cache clean failed, continuing...")
+		} else {
+			logger.Info("nuclear", "Cleared pub cache")
+		}
+	}
+
+	// Step 3: Run pub get to rebuild everything
+	getArgs := []string{"pub", "get"}
+	logger.LogCommand("nuclear", tool, getArgs)
+
+	if cfg.DryRun {
+		logs = append(logs, fmt.Sprintf("DRY RUN: %s %s", tool, strings.Join(getArgs, " ")))
+		return ActionResult{
+			OK:      true,
+			Message: "Would perform nuclear cache update",
+			Logs:    logs,
+		}
+	}
+
+	cmd := exec.Command(tool, getArgs...)
+	cmd.Dir = projectPath
+	output, err := cmd.CombinedOutput()
+	getOutput := strings.TrimSpace(string(output))
+	logs = append(logs, getOutput)
+
+	if err != nil {
+		return ActionResult{
+			OK:   false,
+			Err:  fmt.Sprintf("pub get failed: %v", err),
+			Logs: logs,
+		}
+	}
+
+	return ActionResult{
+		OK:      true,
+		Message: "Nuclear cache update completed - all packages refreshed from GitHub",
+		Logs:    logs,
+	}
 }

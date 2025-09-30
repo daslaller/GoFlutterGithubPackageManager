@@ -46,7 +46,7 @@ type Reco struct {
 type Step int
 
 const (
-	StepDetectProject Step = iota
+	StepMainMenu Step = iota
 	StepChooseSource
 	StepListRepos
 	StepEditSpecs

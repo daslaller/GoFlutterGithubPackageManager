@@ -42,19 +42,20 @@ type Model struct {
 	recos []core.Reco
 
 	// UI state
-	width      int
-	height     int
-	spinnerIdx int
+	width       int
+	height      int
+	spinnerIdx  int
+	lastSpinner time.Time
 }
 
 // Init implements tea.Model
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		tea.Cmd(func() tea.Msg {
-			return stepMsg{step: core.StepDetectProject}
+			return stepMsg{step: core.StepMainMenu}
 		}),
-		m.startLoading("Detecting Flutter projects..."),
-		m.tickSpinner(),
+		tea.Cmd(m.detectProjectQuick), // Quick, non-blocking detection
+		m.tickSpinnerOptimized(),      // Optimized spinner animation
 	)
 }
 
@@ -75,13 +76,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case projectsMsg:
 		m.loading = false
+		oldProjectCount := len(m.projects)
 		m.projects = msg.projects
+
+		// If we're on the main menu and just did a quick detection, stay on main menu
+		if m.step == core.StepMainMenu && oldProjectCount == 0 {
+			return m, nil
+		}
+
+		// If we were scanning directories (option 1), show results or go to source selection
 		if len(m.projects) == 1 {
 			m.selectedProject = 0
 			m.step = core.StepChooseSource
 			return m, m.getStepCommand()
 		} else if len(m.projects) == 0 {
-			// No projects found - show a message but allow user to continue
 			m.err = fmt.Errorf("no Flutter projects found. Create a new Flutter project with 'flutter create' or navigate to an existing one")
 		}
 		return m, nil
@@ -92,9 +100,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		m.spinnerIdx = (m.spinnerIdx + 1) % 10 // 10 spinner frames
+		// Only update spinner if enough time has passed (throttle for performance)
+		now := time.Now()
+		if now.Sub(m.lastSpinner) >= 100*time.Millisecond {
+			m.spinnerIdx = (m.spinnerIdx + 1) % 10 // 10 spinner frames
+			m.lastSpinner = now
+		}
 		if m.loading {
-			return m, m.tickSpinner()
+			return m, m.tickSpinnerOptimized()
 		}
 		return m, nil
 
@@ -138,8 +151,8 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.step {
-	case core.StepDetectProject:
-		return m.handleDetectProjectKeys(msg)
+	case core.StepMainMenu:
+		return m.handleMainMenuKeys(msg)
 	case core.StepChooseSource:
 		return m.handleChooseSourceKeys(msg)
 	case core.StepListRepos:
@@ -158,28 +171,81 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // Step-specific key handlers
-func (m Model) handleDetectProjectKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleMainMenuKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "up", "k":
-		if m.selectedProject > 0 {
-			m.selectedProject--
+		if m.cursor > 0 {
+			m.cursor--
 		}
 	case "down", "j":
-		if m.selectedProject < len(m.projects)-1 {
-			m.selectedProject++
+		// Navigate through available options (skip unavailable ones)
+		maxOptions := 6 // Total menu options (1-6)
+		if m.cursor < maxOptions-1 {
+			m.cursor++
 		}
-	case "enter":
+	case "enter", " ":
+		return m.handleMenuSelection()
+	// Direct option selection matching shell script exactly
+	case "1":
+		m.cursor = 0 // Scan directories
+		return m.handleMenuSelection()
+	case "2":
+		m.cursor = 1 // GitHub repo
+		return m.handleMenuSelection()
+	case "3":
+		m.cursor = 2 // Configure search
+		return m.handleMenuSelection()
+	case "4":
 		if len(m.projects) > 0 {
+			m.cursor = 3 // Use detected project
+			return m.handleMenuSelection()
+		}
+	case "5":
+		if len(m.projects) > 0 {
+			m.cursor = 4 // Express Git update
+			return m.handleMenuSelection()
+		}
+	case "6":
+		m.cursor = 5 // Check for Flutter-PM updates
+		return m.handleMenuSelection()
+	}
+	return m, nil
+}
+
+func (m Model) handleMenuSelection() (tea.Model, tea.Cmd) {
+	// Handle selection based on SHELL SCRIPT menu structure (1-6)
+	switch m.cursor {
+	case 0: // "1. Scan directories" - scan configured directories for projects
+		return m, tea.Batch(
+			m.startLoading("Scanning directories for Flutter projects..."),
+			tea.Cmd(m.detectProjectsAsync),
+		)
+	case 1: // "2. GitHub repo" - use GitHub repositories as source for packages
+		m.step = core.StepListRepos
+		m.source = core.SourceGitHub
+		return m, m.getStepCommand()
+	case 2: // "3. Configure search" - configure search settings
+		// TODO: Implement configuration
+		m.err = fmt.Errorf("configuration not implemented yet")
+		return m, nil
+	case 3: // "4. Use detected project" - continue with locally found project as source [DEFAULT]
+		if len(m.projects) > 0 {
+			m.selectedProject = 0
 			m.step = core.StepChooseSource
 			return m, m.getStepCommand()
 		}
-	case "s", "S":
-		// Skip project detection and continue
-		if len(m.projects) == 0 {
-			m.err = nil // Clear any error
-			m.step = core.StepChooseSource
-			return m, m.getStepCommand()
+	case 4: // "5. 🚀 Express Git update" - update existing git dependencies for local project
+		if len(m.projects) > 0 {
+			return m, tea.Batch(
+				m.startLoading("🚀 Express Git update - updating dependencies..."),
+				tea.Cmd(m.expressGitUpdate),
+			)
 		}
+	case 5: // "6. 🔄 Check for Flutter-PM updates" - update Flutter-PM itself
+		return m, tea.Batch(
+			m.startLoading("🔄 Checking for Flutter-PM updates..."),
+			tea.Cmd(m.checkSelfUpdate),
+		)
 	}
 	return m, nil
 }
@@ -265,11 +331,8 @@ func (m Model) handleSummaryKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // getStepCommand returns the command to execute for the current step
 func (m Model) getStepCommand() tea.Cmd {
 	switch m.step {
-	case core.StepDetectProject:
-		return tea.Batch(
-			m.startLoading("Scanning for Flutter projects..."),
-			tea.Cmd(m.detectProjectsAsync),
-		)
+	case core.StepMainMenu:
+		return nil // Main menu is UI only
 	case core.StepChooseSource:
 		return nil // UI only
 	case core.StepListRepos:
@@ -300,18 +363,29 @@ func (m Model) tickSpinner() tea.Cmd {
 	})
 }
 
-func (m Model) detectProjectsAsync() tea.Msg {
-	// Try to find nearest pubspec first
+// tickSpinnerOptimized provides more efficient spinner animation
+func (m Model) tickSpinnerOptimized() tea.Cmd {
+	// Use 150ms interval instead of 100ms to reduce CPU usage while maintaining smooth animation
+	return tea.Tick(time.Millisecond*150, func(t time.Time) tea.Msg {
+		return tickMsg{}
+	})
+}
+
+func (m Model) detectProjectQuick() tea.Msg {
+	// Only try to find nearest pubspec (quick detection like PowerShell)
 	if project, err := core.NearestPubspec(""); err == nil {
 		return projectsMsg{projects: []core.Project{*project}}
 	}
+	// If no local project found, that's fine - just show empty projects
+	return projectsMsg{projects: []core.Project{}}
+}
 
-	// Fall back to scanning common roots
+func (m Model) detectProjectsAsync() tea.Msg {
+	// Fall back to full scanning when explicitly requested
 	projects, err := core.ScanCommonRoots()
 	if err != nil {
 		return errorMsg{err: err}
 	}
-
 	return projectsMsg{projects: projects}
 }
 
@@ -373,14 +447,15 @@ func (m Model) executeJobs() tea.Msg {
 		m.logger.Info("backup", fmt.Sprintf("Created backup: %s", backupInfo.BackupPath))
 	}
 
-	// Execute each job
-	for _, spec := range m.edits {
-		result := core.AddGitDependency(m.logger, &m.cfg, project.Path, spec)
+	// Use batch operation for better performance when adding multiple dependencies
+	if len(m.edits) > 1 {
+		m.logger.Info("execute", fmt.Sprintf("Batch adding %d dependencies", len(m.edits)))
+		batchResult := core.AddGitDependenciesBatch(m.logger, &m.cfg, project.Path, m.edits)
+		results = append(results, batchResult)
+	} else if len(m.edits) == 1 {
+		// Single dependency - use individual method
+		result := core.AddGitDependency(m.logger, &m.cfg, project.Path, m.edits[0])
 		results = append(results, result)
-
-		if !result.OK {
-			break // Stop on first error
-		}
 	}
 
 	// Run pub get if all succeeded
@@ -406,6 +481,40 @@ func (m Model) generateRecommendations() tea.Msg {
 	return recosMsg{recos: recos}
 }
 
+// expressGitUpdate performs express git update for existing git dependencies
+func (m Model) expressGitUpdate() tea.Msg {
+	if len(m.projects) == 0 {
+		return errorMsg{err: fmt.Errorf("no project selected")}
+	}
+
+	project := m.projects[m.selectedProject]
+	result := core.ExpressGitUpdate(m.logger, &m.cfg, project.Path)
+
+	// Return result as a single-item results list
+	return resultsMsg{results: []core.ActionResult{result}}
+}
+
+// checkSelfUpdate checks for Flutter-PM updates
+func (m Model) checkSelfUpdate() tea.Msg {
+	result := core.CheckSelfUpdate(m.logger, &m.cfg)
+
+	// Return result as a single-item results list
+	return resultsMsg{results: []core.ActionResult{result}}
+}
+
+// nuclearCacheUpdate performs nuclear cache clearing + update (remove pubspec.lock + clear pub cache)
+func (m Model) nuclearCacheUpdate() tea.Msg {
+	if len(m.projects) == 0 {
+		return errorMsg{err: fmt.Errorf("no project selected")}
+	}
+
+	project := m.projects[m.selectedProject]
+	result := core.NuclearCacheUpdate(m.logger, &m.cfg, project.Path)
+
+	// Return result as a single-item results list
+	return resultsMsg{results: []core.ActionResult{result}}
+}
+
 // View implements tea.Model
 func (m Model) View() string {
 	var b strings.Builder
@@ -414,9 +523,11 @@ func (m Model) View() string {
 	header := headerStyle.Render("🎯 Flutter Package Manager")
 	b.WriteString(header + "\n\n")
 
-	// Step indicator
-	stepText := m.getStepText()
-	b.WriteString(stepStyle.Render(stepText) + "\n\n")
+	// Step indicator (only show for non-main menu)
+	if m.step != core.StepMainMenu {
+		stepText := m.getStepText()
+		b.WriteString(stepStyle.Render(stepText) + "\n\n")
+	}
 
 	// Main content based on current step
 	content := m.getStepView()
@@ -431,18 +542,18 @@ func (m Model) View() string {
 
 func (m Model) getStepText() string {
 	switch m.step {
-	case core.StepDetectProject:
-		return "Step 1/6: 🔍 Detect Project"
+	case core.StepMainMenu:
+		return "🎯 Flutter Package Manager - Main Menu"
 	case core.StepChooseSource:
-		return "Step 2/6: 📂 Choose Source"
+		return "Step 1/5: 📂 Choose Source"
 	case core.StepListRepos:
-		return "Step 3/6: 📋 List Repositories"
+		return "Step 2/5: 📋 List Repositories"
 	case core.StepEditSpecs:
-		return "Step 4/6: ✏️ Edit Specifications"
+		return "Step 3/5: ✏️ Edit Specifications"
 	case core.StepConfirm:
-		return "Step 5/6: ✅ Confirm"
+		return "Step 4/5: ✅ Confirm"
 	case core.StepExecute:
-		return "Step 6/6: ⚡ Execute"
+		return "Step 5/5: ⚡ Execute"
 	case core.StepSummary:
 		return "✨ Summary & Recommendations"
 	}
@@ -451,8 +562,8 @@ func (m Model) getStepText() string {
 
 func (m Model) getStepView() string {
 	switch m.step {
-	case core.StepDetectProject:
-		return m.viewDetectProject()
+	case core.StepMainMenu:
+		return m.viewMainMenu()
 	case core.StepChooseSource:
 		return m.viewChooseSource()
 	case core.StepListRepos:
@@ -471,11 +582,12 @@ func (m Model) getStepView() string {
 
 func (m Model) getFooter() string {
 	switch m.step {
-	case core.StepDetectProject:
-		if len(m.projects) == 0 && !m.loading {
-			return "s skip detection • q quit"
+	case core.StepMainMenu:
+		if len(m.projects) > 0 {
+			return "↑/↓ navigate • enter/1-6 select • q quit"
+		} else {
+			return "↑/↓ navigate • enter/1-3 select • q quit"
 		}
-		return "↑/↓ navigate • enter select • s skip • q quit"
 	case core.StepChooseSource:
 		return "↑/↓ navigate • enter select • q quit"
 	case core.StepListRepos:

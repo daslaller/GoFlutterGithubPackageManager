@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 )
 
 // NearestPubspec walks up from the current directory to find the nearest pubspec.yaml
@@ -51,25 +53,81 @@ func NearestPubspec(startDir string) (*Project, error) {
 }
 
 // ScanCommonRoots scans common development directories for Flutter projects
-// This mirrors the shell script's local project discovery
+// This mirrors the shell script's local project discovery with concurrent scanning
 func ScanCommonRoots() ([]Project, error) {
 	roots := CommonRoots()
-	var projects []Project
+	numWorkers := runtime.NumCPU() // Use all available CPU cores
+	if numWorkers > len(roots) {
+		numWorkers = len(roots) // Don't use more workers than roots
+	}
 
-	for _, root := range roots {
-		if _, err := os.Stat(root); os.IsNotExist(err) {
-			continue // Skip non-existent directories
+	// Create channels for work distribution
+	rootChan := make(chan string, len(roots))
+	resultChan := make(chan []Project, len(roots))
+	errorChan := make(chan error, len(roots))
+
+	// Start workers
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for root := range rootChan {
+				if _, err := os.Stat(root); os.IsNotExist(err) {
+					resultChan <- []Project{} // Skip non-existent directories
+					continue
+				}
+
+				rootProjects, err := scanDirectoryForProjects(root, 3) // Max depth of 3
+				if err != nil {
+					errorChan <- err
+					resultChan <- []Project{} // Continue with empty result
+					continue
+				}
+
+				resultChan <- rootProjects
+			}
+		}()
+	}
+
+	// Send work to workers
+	go func() {
+		defer close(rootChan)
+		for _, root := range roots {
+			rootChan <- root
 		}
+	}()
 
-		rootProjects, err := scanDirectoryForProjects(root, 3) // Max depth of 3
-		if err != nil {
+	// Close channels when workers are done
+	go func() {
+		wg.Wait()
+		close(resultChan)
+		close(errorChan)
+	}()
+
+	// Collect results
+	var projects []Project
+	for i := 0; i < len(roots); i++ {
+		select {
+		case result := <-resultChan:
+			projects = append(projects, result...)
+		case <-errorChan:
 			// Log error but continue with other roots
 			continue
 		}
-
-		projects = append(projects, rootProjects...)
 	}
 
+	// Drain any remaining errors
+	for {
+		select {
+		case <-errorChan:
+			// Ignore remaining errors
+		default:
+			goto done
+		}
+	}
+
+done:
 	return projects, nil
 }
 
@@ -94,7 +152,7 @@ func CommonRoots() []string {
 	return roots
 }
 
-// scanDirectoryForProjects recursively scans a directory for Flutter projects
+// scanDirectoryForProjects recursively scans a directory for Flutter projects with optimized I/O
 func scanDirectoryForProjects(dir string, maxDepth int) ([]Project, error) {
 	var projects []Project
 
@@ -102,6 +160,7 @@ func scanDirectoryForProjects(dir string, maxDepth int) ([]Project, error) {
 		return projects, nil
 	}
 
+	// Use ReadDir for better performance than Stat + ReadDir separately
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read directory %s: %w", dir, err)
@@ -115,7 +174,8 @@ func scanDirectoryForProjects(dir string, maxDepth int) ([]Project, error) {
 			PubspecPath: pubspecPath,
 		}
 
-		if name, err := extractProjectName(pubspecPath); err == nil {
+		// Only extract project name if we find pubspec.yaml
+		if name, err := extractProjectNameOptimized(pubspecPath); err == nil {
 			project.Name = name
 		}
 
@@ -123,7 +183,8 @@ func scanDirectoryForProjects(dir string, maxDepth int) ([]Project, error) {
 		return projects, nil // Don't scan subdirectories if this is already a project
 	}
 
-	// Scan subdirectories
+	// Pre-filter directories to avoid unnecessary recursive calls
+	var validDirs []string
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -135,10 +196,23 @@ func scanDirectoryForProjects(dir string, maxDepth int) ([]Project, error) {
 			name == "node_modules" ||
 			name == "build" ||
 			name == ".git" ||
-			name == "vendor" {
+			name == "vendor" ||
+			name == ".dart_tool" ||
+			name == ".vscode" ||
+			name == ".idea" {
 			continue
 		}
 
+		validDirs = append(validDirs, name)
+	}
+
+	// Process valid directories concurrently if there are enough of them
+	if len(validDirs) > 4 && maxDepth > 1 {
+		return scanDirectoriesConcurrent(dir, validDirs, maxDepth-1)
+	}
+
+	// Scan subdirectories sequentially for small numbers
+	for _, name := range validDirs {
 		subDir := filepath.Join(dir, name)
 		subProjects, err := scanDirectoryForProjects(subDir, maxDepth-1)
 		if err != nil {
@@ -152,25 +226,98 @@ func scanDirectoryForProjects(dir string, maxDepth int) ([]Project, error) {
 	return projects, nil
 }
 
+// scanDirectoriesConcurrent scans multiple directories concurrently for better performance
+func scanDirectoriesConcurrent(baseDir string, dirNames []string, maxDepth int) ([]Project, error) {
+	type result struct {
+		projects []Project
+		err      error
+	}
+
+	numWorkers := runtime.NumCPU()
+	if numWorkers > len(dirNames) {
+		numWorkers = len(dirNames)
+	}
+
+	dirChan := make(chan string, len(dirNames))
+	resultChan := make(chan result, len(dirNames))
+
+	// Start workers
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for dirName := range dirChan {
+				subDir := filepath.Join(baseDir, dirName)
+				subProjects, err := scanDirectoryForProjects(subDir, maxDepth)
+				resultChan <- result{projects: subProjects, err: err}
+			}
+		}()
+	}
+
+	// Send work
+	go func() {
+		defer close(dirChan)
+		for _, dirName := range dirNames {
+			dirChan <- dirName
+		}
+	}()
+
+	// Close result channel when workers are done
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// Collect results
+	var allProjects []Project
+	for i := 0; i < len(dirNames); i++ {
+		res := <-resultChan
+		if res.err == nil {
+			allProjects = append(allProjects, res.projects...)
+		}
+		// Ignore errors and continue - same behavior as sequential version
+	}
+
+	return allProjects, nil
+}
+
 // extractProjectName extracts the project name from pubspec.yaml
 func extractProjectName(pubspecPath string) (string, error) {
+	return extractProjectNameOptimized(pubspecPath)
+}
+
+// extractProjectNameOptimized extracts the project name with optimized reading
+func extractProjectNameOptimized(pubspecPath string) (string, error) {
 	content, err := os.ReadFile(pubspecPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read pubspec.yaml: %w", err)
 	}
 
-	lines := strings.Split(string(content), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "name:") {
-			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 {
-				name := strings.TrimSpace(parts[1])
-				// Remove quotes if present
-				name = strings.Trim(name, "\"'")
-				return name, nil
-			}
-		}
+	// Use string search for quick name extraction
+	contentStr := string(content)
+	namePrefix := "name:"
+	nameIndex := strings.Index(contentStr, namePrefix)
+	if nameIndex == -1 {
+		return "", fmt.Errorf("no name field found in pubspec.yaml")
+	}
+
+	// Find the end of the line
+	lineEnd := strings.Index(contentStr[nameIndex:], "\n")
+	if lineEnd == -1 {
+		lineEnd = len(contentStr)
+	} else {
+		lineEnd += nameIndex
+	}
+
+	// Extract the line and parse it
+	line := contentStr[nameIndex:lineEnd]
+	parts := strings.SplitN(line, ":", 2)
+	if len(parts) == 2 {
+		name := strings.TrimSpace(parts[1])
+		// Remove quotes if present
+		name = strings.Trim(name, "\"'")
+		return name, nil
 	}
 
 	return "", fmt.Errorf("no name field found in pubspec.yaml")

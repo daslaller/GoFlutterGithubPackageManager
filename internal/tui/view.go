@@ -3,11 +3,111 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
-// viewDetectProject renders the project detection step
+// Optimized spinner frames as constants for better performance
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// Pre-compiled spinner style for performance
+var spinnerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#13B9FD"))
+
+// viewMainMenu renders the main menu like PowerShell version with optimizations
+func (m Model) viewMainMenu() string {
+	var b strings.Builder
+	b.Grow(1024) // Pre-allocate reasonable buffer size
+
+	if m.err != nil {
+		b.WriteString(errorStyle.Render("❌ Error: " + m.err.Error()))
+		b.WriteString("\n\n")
+	}
+
+	if m.loading {
+		frame := spinnerFrames[m.spinnerIdx]
+
+		if m.loadingText != "" {
+			b.WriteString(spinnerStyle.Render(frame))
+			b.WriteString(" ")
+			b.WriteString(m.loadingText)
+			b.WriteString("\n\n")
+		}
+		return b.String()
+	}
+
+	hasLocalProject := len(m.projects) > 0
+	projectName := ""
+	if hasLocalProject {
+		projectName = m.projects[0].Name
+		if projectName == "" {
+			projectName = fmt.Sprintf("Project in %s", m.projects[0].Path)
+		}
+	}
+
+	// Menu options (matching shell script exactly as clarified)
+	options := []struct {
+		icon      string
+		text      string
+		available bool
+		isDefault bool
+	}{
+		{"📁", "Scan directories", true, !hasLocalProject},                                      // Option 1
+		{"🐙", "GitHub repo", true, false},                                                      // Option 2
+		{"⚙️", "Configure search", true, false},                                                // Option 3
+		{"📦", fmt.Sprintf("Use detected: %s", projectName), hasLocalProject, hasLocalProject},  // Option 4 [DEFAULT]
+		{"🚀", fmt.Sprintf("🚀 Express Git update for %s", projectName), hasLocalProject, false}, // Option 5 (check git deps later)
+		{"🔄", "🔄 Check for Flutter-PM updates", true, false},                                   // Option 6
+	}
+
+	// TODO: Check for git dependencies properly
+	hasGitDeps := hasLocalProject // Simplified for now
+
+	// Update option 5 availability based on git deps
+	options[4].available = hasLocalProject && hasGitDeps
+
+	// Render menu exactly like shell script (1-6 numbering)
+	for i, option := range options {
+		if !option.available {
+			continue
+		}
+
+		var prefix string
+		var style lipgloss.Style
+
+		// Use actual option index for cursor, not menu display index
+		if i == m.cursor {
+			prefix = "► "
+			style = selectedStyle
+		} else {
+			prefix = "  "
+			style = lipgloss.NewStyle()
+		}
+
+		// Build option text exactly like shell script
+		var optionBuilder strings.Builder
+		optionBuilder.WriteString(fmt.Sprintf("%d. %s", i+1, option.text))
+		if option.isDefault {
+			optionBuilder.WriteString(" [DEFAULT]")
+			if i != m.cursor {
+				style = successStyle
+			}
+		}
+
+		b.WriteString(style.Render(prefix + optionBuilder.String()))
+		b.WriteString("\n")
+	}
+
+	if hasLocalProject {
+		b.WriteString(fmt.Sprintf("\n💡 Detected Flutter project: %s\n", projectName))
+	} else {
+		b.WriteString("\n💡 No Flutter project detected in current directory\n")
+	}
+
+	return b.String()
+}
+
+// viewDetectProject renders the project detection step (kept for scanning results)
 func (m Model) viewDetectProject() string {
 	var b strings.Builder
 
@@ -141,41 +241,62 @@ func (m Model) viewListRepos() string {
 		b.WriteString(successStyle.Render(fmt.Sprintf("✅ Selected: %d packages", selectedCount)) + "\n\n")
 	}
 
-	// Show repositories
-	for i, repo := range m.repos {
-		prefix := "  "
-		checkbox := "☐"
-		style := lipgloss.NewStyle()
+	// Pre-compiled styles for better performance
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
 
+	// Show repositories with optimized rendering
+	for i, repo := range m.repos {
+		var prefix, checkbox, privacy string
+		var style lipgloss.Style
+
+		// Determine checkbox and style
 		if m.picks[i] {
 			checkbox = "☑"
 			style = successStyle
+		} else {
+			checkbox = "☐"
+			style = lipgloss.NewStyle()
 		}
 
+		// Determine prefix and override style if cursor
 		if i == m.cursor {
 			prefix = "► "
 			if !m.picks[i] {
 				style = selectedStyle
 			}
+		} else {
+			prefix = "  "
 		}
 
 		// Privacy indicator
-		privacy := ""
 		if repo.Privacy == "private" {
 			privacy = "🔒 "
 		} else {
 			privacy = "🔓 "
 		}
 
-		repoText := fmt.Sprintf("%s%s %s%s/%s", prefix, checkbox, privacy, repo.Owner, repo.Name)
-		b.WriteString(style.Render(repoText) + "\n")
+		// Build repo text efficiently
+		var repoBuilder strings.Builder
+		repoBuilder.WriteString(prefix)
+		repoBuilder.WriteString(checkbox)
+		repoBuilder.WriteString(" ")
+		repoBuilder.WriteString(privacy)
+		repoBuilder.WriteString(repo.Owner)
+		repoBuilder.WriteString("/")
+		repoBuilder.WriteString(repo.Name)
 
+		b.WriteString(style.Render(repoBuilder.String()))
+		b.WriteString("\n")
+
+		// Add description if present
 		if repo.Desc != "" {
 			desc := repo.Desc
 			if len(desc) > 80 {
 				desc = desc[:77] + "..."
 			}
-			b.WriteString(fmt.Sprintf("     %s\n", lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")).Render(desc)))
+			b.WriteString("     ")
+			b.WriteString(descStyle.Render(desc))
+			b.WriteString("\n")
 		}
 		b.WriteString("\n")
 	}
@@ -352,7 +473,21 @@ func (m Model) viewSummary() string {
 	return b.String()
 }
 
-// renderProgressBar creates a visual progress bar
+// Style cache for performance optimization
+type StyleCache struct {
+	mu     sync.RWMutex
+	cache  map[string]lipgloss.Style
+	render map[string]string // Cache rendered strings
+}
+
+var (
+	styleCache = &StyleCache{
+		cache:  make(map[string]lipgloss.Style),
+		render: make(map[string]string),
+	}
+)
+
+// renderProgressBar creates a visual progress bar with caching
 func (m Model) renderProgressBar(progress float64, width int) string {
 	if progress > 1.0 {
 		progress = 1.0
@@ -361,15 +496,29 @@ func (m Model) renderProgressBar(progress float64, width int) string {
 		progress = 0.0
 	}
 
+	// Create cache key
+	cacheKey := fmt.Sprintf("progress_%.2f_%d", progress, width)
+
+	// Check cache first
+	styleCache.mu.RLock()
+	if cached, exists := styleCache.render[cacheKey]; exists {
+		styleCache.mu.RUnlock()
+		return cached
+	}
+	styleCache.mu.RUnlock()
+
 	filled := int(progress * float64(width))
 	empty := width - filled
 
-	bar := ""
+	// Use strings.Builder for efficient string concatenation
+	var bar strings.Builder
+	bar.Grow(width) // Pre-allocate capacity
+
 	for i := 0; i < filled; i++ {
-		bar += "█"
+		bar.WriteString("█")
 	}
 	for i := 0; i < empty; i++ {
-		bar += "░"
+		bar.WriteString("░")
 	}
 
 	percentage := int(progress * 100)
@@ -381,7 +530,14 @@ func (m Model) renderProgressBar(progress float64, width int) string {
 		barStyle = barStyle.Foreground(lipgloss.Color("#13B9FD")) // Blue in progress
 	}
 
-	return fmt.Sprintf("%s %d%%", barStyle.Render(bar), percentage)
+	result := fmt.Sprintf("%s %d%%", barStyle.Render(bar.String()), percentage)
+
+	// Cache the result
+	styleCache.mu.Lock()
+	styleCache.render[cacheKey] = result
+	styleCache.mu.Unlock()
+
+	return result
 }
 
 // Additional styles

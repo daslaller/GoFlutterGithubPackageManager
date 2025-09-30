@@ -2,14 +2,42 @@ package core
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
+	"time"
 )
 
-// GitLsRemote gets the SHA for a specific ref from a git repository
+// GitLsRemoteCache provides caching for git ls-remote operations
+type GitLsRemoteCache struct {
+	mu    sync.RWMutex
+	cache map[string]string // URL+ref -> SHA
+	ttl   time.Duration
+}
+
+var (
+	gitLsRemoteCache = &GitLsRemoteCache{
+		cache: make(map[string]string),
+		ttl:   2 * time.Minute, // Cache git ls-remote for 2 minutes
+	}
+)
+
+// GitLsRemote gets the SHA for a specific ref from a git repository with caching
 func GitLsRemote(url, ref string) (string, error) {
+	cacheKey := url + "#" + ref
+
+	// Try cache first
+	gitLsRemoteCache.mu.RLock()
+	if cached, exists := gitLsRemoteCache.cache[cacheKey]; exists {
+		gitLsRemoteCache.mu.RUnlock()
+		return cached, nil
+	}
+	gitLsRemoteCache.mu.RUnlock()
+
 	cmd := exec.Command("git", "ls-remote", url, ref)
 	output, err := cmd.Output()
 	if err != nil {
@@ -20,7 +48,16 @@ func GitLsRemote(url, ref string) (string, error) {
 	for _, line := range lines {
 		parts := strings.Fields(line)
 		if len(parts) >= 2 && (parts[1] == ref || parts[1] == "refs/heads/"+ref || parts[1] == "refs/tags/"+ref) {
-			return parts[0], nil
+			sha := parts[0]
+			// Cache the result
+			gitLsRemoteCache.mu.Lock()
+			gitLsRemoteCache.cache[cacheKey] = sha
+			gitLsRemoteCache.mu.Unlock()
+
+			// Start cleanup timer if this is the first entry
+			go gitLsRemoteCache.cleanupAfterTTL(cacheKey)
+
+			return sha, nil
 		}
 	}
 
@@ -116,9 +153,30 @@ type GitHubRepo struct {
 	} `json:"owner"`
 }
 
-// ListGitHubRepos uses gh CLI to list user repositories
-// This mirrors the shell script's GitHub integration
+// GitHubCache provides intelligent caching for GitHub API responses
+type GitHubCache struct {
+	mu     sync.RWMutex
+	repos  []RepoCandidate
+	expiry time.Time
+	hash   string
+	tl     time.Duration
+}
+
+var (
+	githubCache = &GitHubCache{
+		tl: 5 * time.Minute, // Cache for 5 minutes
+	}
+)
+
+// ListGitHubRepos uses gh CLI to list user repositories with intelligent caching
+// This mirrors the shell script's GitHub integration but optimized for performance
 func ListGitHubRepos(logger *Logger) ([]RepoCandidate, error) {
+	// Check cache first
+	if cached := githubCache.Get(); cached != nil {
+		logger.Debug("github", "Using cached repository list")
+		return cached, nil
+	}
+
 	// Check if gh is available
 	if _, err := exec.LookPath("gh"); err != nil {
 		return nil, fmt.Errorf("GitHub CLI (gh) not found. Please install: https://cli.github.com/")
@@ -132,10 +190,10 @@ func ListGitHubRepos(logger *Logger) ([]RepoCandidate, error) {
 
 	logger.Debug("github", "Fetching repositories from GitHub")
 
-	// Get repositories as JSON
+	// Get repositories as JSON with increased limit for better UX
 	cmd = exec.Command("gh", "repo", "list",
 		"--json", "name,nameWithOwner,description,isPrivate,url,sshUrl,owner",
-		"--limit", "100")
+		"--limit", "200") // Increased from 100 for better coverage
 
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -149,7 +207,8 @@ func ListGitHubRepos(logger *Logger) ([]RepoCandidate, error) {
 		return nil, fmt.Errorf("failed to parse repository JSON: %w", err)
 	}
 
-	var candidates []RepoCandidate
+	// Transform repos to candidates efficiently
+	candidates := make([]RepoCandidate, 0, len(repos))
 	for _, repo := range repos {
 		privacy := "public"
 		if repo.IsPrivate {
@@ -171,12 +230,62 @@ func ListGitHubRepos(logger *Logger) ([]RepoCandidate, error) {
 		})
 	}
 
+	// Cache the results
+	githubCache.Set(candidates)
+
 	logger.Info("github", fmt.Sprintf("Found %d repositories", len(candidates)))
 	return candidates, nil
 }
 
-// GetRepoBranches gets available branches for a repository
+// Get returns cached repositories if still valid
+func (c *GitHubCache) Get() []RepoCandidate {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if time.Now().Before(c.expiry) && len(c.repos) > 0 {
+		return c.repos
+	}
+
+	return nil
+}
+
+// Set caches the repositories with expiry
+func (c *GitHubCache) Set(repos []RepoCandidate) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.repos = repos
+	c.expiry = time.Now().Add(c.ttl)
+
+	// Generate hash for cache invalidation if needed
+	h := sha256.New()
+	for _, repo := range repos {
+		h.Write([]byte(repo.URL + repo.Name))
+	}
+	c.hash = hex.EncodeToString(h.Sum(nil))
+}
+
+// InvalidateCache clears the cache
+func (c *GitHubCache) InvalidateCache() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.repos = nil
+	c.expiry = time.Time{}
+}
+
+// GetRepoBranches gets available branches for a repository with caching
 func GetRepoBranches(repoURL string) ([]string, error) {
+	cacheKey := "branches:" + repoURL
+
+	// Try cache first (branches don't change frequently)
+	gitLsRemoteCache.mu.RLock()
+	if cached, exists := gitLsRemoteCache.cache[cacheKey]; exists {
+		gitLsRemoteCache.mu.RUnlock()
+		return strings.Split(cached, ","), nil
+	}
+	gitLsRemoteCache.mu.RUnlock()
+
 	cmd := exec.Command("git", "ls-remote", "--heads", repoURL)
 	output, err := cmd.Output()
 	if err != nil {
@@ -201,14 +310,33 @@ func GetRepoBranches(repoURL string) ([]string, error) {
 	}
 
 	if len(branches) == 0 {
-		return []string{"main"}, nil // Default fallback
+		branches = []string{"main"} // Default fallback
 	}
+
+	// Cache the results
+	gitLsRemoteCache.mu.Lock()
+	gitLsRemoteCache.cache[cacheKey] = strings.Join(branches, ",")
+	gitLsRemoteCache.mu.Unlock()
+	go gitLsRemoteCache.cleanupAfterTTL(cacheKey)
 
 	return branches, nil
 }
 
-// GetRepoTags gets available tags for a repository
+// GetRepoTags gets available tags for a repository with caching
 func GetRepoTags(repoURL string) ([]string, error) {
+	cacheKey := "tags:" + repoURL
+
+	// Try cache first (tags are immutable once created)
+	gitLsRemoteCache.mu.RLock()
+	if cached, exists := gitLsRemoteCache.cache[cacheKey]; exists {
+		gitLsRemoteCache.mu.RUnlock()
+		if cached == "" {
+			return []string{}, nil
+		}
+		return strings.Split(cached, ","), nil
+	}
+	gitLsRemoteCache.mu.RUnlock()
+
 	cmd := exec.Command("git", "ls-remote", "--tags", repoURL)
 	output, err := cmd.Output()
 	if err != nil {
@@ -232,7 +360,22 @@ func GetRepoTags(repoURL string) ([]string, error) {
 		}
 	}
 
+	// Cache the results
+	cacheValue := strings.Join(tags, ",")
+	gitLsRemoteCache.mu.Lock()
+	gitLsRemoteCache.cache[cacheKey] = cacheValue
+	gitLsRemoteCache.mu.Unlock()
+	go gitLsRemoteCache.cleanupAfterTTL(cacheKey)
+
 	return tags, nil
+}
+
+// cleanupAfterTTL removes cache entry after TTL expires
+func (c *GitLsRemoteCache) cleanupAfterTTL(key string) {
+	time.Sleep(c.ttl)
+	c.mu.Lock()
+	delete(c.cache, key)
+	c.mu.Unlock()
 }
 
 // ValidateGitURL checks if a Git URL is valid and accessible
