@@ -20,6 +20,8 @@ type Model struct {
 	// Discovery
 	projects        []core.Project
 	selectedProject int
+	loading         bool
+	loadingText     string
 
 	// Source selection
 	source core.SourceMode
@@ -45,9 +47,12 @@ type Model struct {
 
 // Init implements tea.Model
 func (m Model) Init() tea.Cmd {
-	return tea.Cmd(func() tea.Msg {
-		return stepMsg{step: core.StepDetectProject}
-	})
+	return tea.Batch(
+		tea.Cmd(func() tea.Msg {
+			return stepMsg{step: core.StepDetectProject}
+		}),
+		m.startLoading("Detecting Flutter projects..."),
+	)
 }
 
 // Update implements tea.Model
@@ -66,6 +71,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.getStepCommand()
 
 	case projectsMsg:
+		m.loading = false
 		m.projects = msg.projects
 		if len(m.projects) == 1 {
 			m.selectedProject = 0
@@ -74,7 +80,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case loadingMsg:
+		m.loading = true
+		m.loadingText = msg.text
+		return m, nil
+
 	case reposMsg:
+		m.loading = false
 		m.repos = msg.repos
 		m.picks = make(map[int]bool)
 		return m, nil
@@ -234,11 +246,17 @@ func (m Model) handleSummaryKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) getStepCommand() tea.Cmd {
 	switch m.step {
 	case core.StepDetectProject:
-		return tea.Cmd(m.detectProjects)
+		return tea.Batch(
+			m.startLoading("Scanning for Flutter projects..."),
+			tea.Cmd(m.detectProjectsAsync),
+		)
 	case core.StepChooseSource:
 		return nil // UI only
 	case core.StepListRepos:
-		return tea.Cmd(m.listRepos)
+		return tea.Batch(
+			m.startLoading("Fetching repositories..."),
+			tea.Cmd(m.listReposAsync),
+		)
 	case core.StepEditSpecs:
 		return tea.Cmd(m.editSpecs)
 	case core.StepExecute:
@@ -250,7 +268,13 @@ func (m Model) getStepCommand() tea.Cmd {
 }
 
 // Commands
-func (m Model) detectProjects() tea.Msg {
+func (m Model) startLoading(text string) tea.Cmd {
+	return tea.Cmd(func() tea.Msg {
+		return loadingMsg{text: text}
+	})
+}
+
+func (m Model) detectProjectsAsync() tea.Msg {
 	// Try to find nearest pubspec first
 	if project, err := core.NearestPubspec(""); err == nil {
 		return projectsMsg{projects: []core.Project{*project}}
@@ -265,7 +289,12 @@ func (m Model) detectProjects() tea.Msg {
 	return projectsMsg{projects: projects}
 }
 
-func (m Model) listRepos() tea.Msg {
+// Legacy function for compatibility
+func (m Model) detectProjects() tea.Msg {
+	return m.detectProjectsAsync()
+}
+
+func (m Model) listReposAsync() tea.Msg {
 	switch m.source {
 	case core.SourceGitHub:
 		repos, err := core.ListGitHubRepos(m.logger)
@@ -278,6 +307,11 @@ func (m Model) listRepos() tea.Msg {
 		return errorMsg{err: fmt.Errorf("source mode %d not implemented yet", m.source)}
 	}
 	return nil
+}
+
+// Legacy function for compatibility
+func (m Model) listRepos() tea.Msg {
+	return m.listReposAsync()
 }
 
 func (m Model) editSpecs() tea.Msg {
@@ -350,13 +384,13 @@ func (m Model) generateRecommendations() tea.Msg {
 func (m Model) View() string {
 	var b strings.Builder
 
-	// Header
+	// Header with proper spacing
 	header := headerStyle.Render("🎯 Flutter Package Manager")
-	b.WriteString(header + "\\n\\n")
+	b.WriteString(header + "\n\n")
 
 	// Step indicator
 	stepText := m.getStepText()
-	b.WriteString(stepStyle.Render(stepText) + "\\n\\n")
+	b.WriteString(stepStyle.Render(stepText) + "\n\n")
 
 	// Main content based on current step
 	content := m.getStepView()
@@ -364,7 +398,7 @@ func (m Model) View() string {
 
 	// Footer with help
 	footer := m.getFooter()
-	b.WriteString("\\n\\n" + helpStyle.Render(footer))
+	b.WriteString("\n\n" + helpStyle.Render(footer))
 
 	return b.String()
 }
@@ -462,13 +496,19 @@ type messageMsg struct {
 	message string
 }
 
+type loadingMsg struct {
+	text string
+}
+
 // Styles
 var (
 	headerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FFFFFF")).
 			Background(lipgloss.Color("#02569B")).
 			Padding(1, 2).
-			Bold(true)
+			Bold(true).
+			Width(60).
+			Align(lipgloss.Center)
 
 	stepStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#13B9FD")).

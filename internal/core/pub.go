@@ -177,7 +177,7 @@ func ValidatePubspec(projectPath string) ([]string, error) {
 		return issues, fmt.Errorf("failed to read pubspec.yaml: %w", err)
 	}
 
-	lines := strings.Split(string(content), "\\n")
+	lines := strings.Split(string(content), "\n")
 	hasName := false
 	hasFlutter := false
 
@@ -213,7 +213,7 @@ func ListGitDependencies(projectPath string) ([]PkgSpec, error) {
 	}
 
 	var deps []PkgSpec
-	lines := strings.Split(string(content), "\\n")
+	lines := strings.Split(string(content), "\n")
 	inDependencies := false
 	inGitDep := false
 	currentPkg := PkgSpec{}

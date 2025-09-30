@@ -16,7 +16,7 @@ func GitLsRemote(url, ref string) (string, error) {
 		return "", fmt.Errorf("failed to run git ls-remote: %w", err)
 	}
 
-	lines := strings.Split(strings.TrimSpace(string(output)), "\\n")
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	for _, line := range lines {
 		parts := strings.Fields(line)
 		if len(parts) >= 2 && (parts[1] == ref || parts[1] == "refs/heads/"+ref || parts[1] == "refs/tags/"+ref) {
@@ -91,7 +91,7 @@ func GetGitRemotes(repoPath string) (map[string]string, error) {
 	}
 
 	remotes := make(map[string]string)
-	lines := strings.Split(strings.TrimSpace(string(output)), "\\n")
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 
 	for _, line := range lines {
 		parts := strings.Fields(line)
@@ -184,7 +184,7 @@ func GetRepoBranches(repoURL string) ([]string, error) {
 	}
 
 	var branches []string
-	lines := strings.Split(strings.TrimSpace(string(output)), "\\n")
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 
 	for _, line := range lines {
 		if line == "" {
@@ -216,7 +216,7 @@ func GetRepoTags(repoURL string) ([]string, error) {
 	}
 
 	var tags []string
-	lines := strings.Split(strings.TrimSpace(string(output)), "\\n")
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 
 	for _, line := range lines {
 		if line == "" {

@@ -179,7 +179,7 @@ func (l *Logger) printEntry(entry LogEntry) {
 		message = fmt.Sprintf("[%s] %s", entry.Component, message)
 	}
 
-	fmt.Fprintf(os.Stderr, "%s%s\\n", prefix, message)
+	fmt.Fprintf(os.Stderr, "%s%s\n", prefix, message)
 }
 
 func parseBool(s string) bool {

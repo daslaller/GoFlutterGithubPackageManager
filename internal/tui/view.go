@@ -12,17 +12,26 @@ func (m Model) viewDetectProject() string {
 	var b strings.Builder
 
 	if m.err != nil {
-		b.WriteString(errorStyle.Render("❌ Error: "+m.err.Error()) + "\\n\\n")
-	}
-
-	if len(m.projects) == 0 {
-		b.WriteString("🔍 Scanning for Flutter projects...\\n")
-		b.WriteString("   • Checking current directory\\n")
-		b.WriteString("   • Scanning common development folders\\n")
+		b.WriteString(errorStyle.Render("❌ Error: "+m.err.Error()) + "\n\n")
 		return b.String()
 	}
 
-	b.WriteString(fmt.Sprintf("Found %d Flutter project(s):\\n\\n", len(m.projects)))
+	if m.loading || len(m.projects) == 0 {
+		spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		// Simple animation frame based on time (you could use a ticker for real animation)
+		frame := spinner[0] // For now, use first frame
+		
+		if m.loadingText != "" {
+			b.WriteString(fmt.Sprintf("%s %s\n", frame, m.loadingText))
+		} else {
+			b.WriteString(fmt.Sprintf("%s Scanning for Flutter projects...\n", frame))
+		}
+		b.WriteString("   • Checking current directory\n")
+		b.WriteString("   • Scanning common development folders\n")
+		return b.String()
+	}
+
+	b.WriteString(fmt.Sprintf("Found %d Flutter project(s):\n\n", len(m.projects)))
 
 	for i, project := range m.projects {
 		prefix := "  "
@@ -38,7 +47,7 @@ func (m Model) viewDetectProject() string {
 			projectInfo += fmt.Sprintf(" (%s)", project.Name)
 		}
 
-		b.WriteString(style.Render(projectInfo) + "\\n")
+		b.WriteString(style.Render(projectInfo) + "\n")
 	}
 
 	return b.String()
@@ -49,8 +58,8 @@ func (m Model) viewChooseSource() string {
 	var b strings.Builder
 
 	project := m.projects[m.selectedProject]
-	b.WriteString(fmt.Sprintf("📂 Project: %s\\n\\n", project.Path))
-	b.WriteString("Choose how to find packages to add:\\n\\n")
+	b.WriteString(fmt.Sprintf("📂 Project: %s\n\n", project.Path))
+	b.WriteString("Choose how to find packages to add:\n\n")
 
 	sources := []struct {
 		icon string
@@ -72,8 +81,8 @@ func (m Model) viewChooseSource() string {
 		}
 
 		sourceText := fmt.Sprintf("%s%s %s", prefix, source.icon, source.name)
-		b.WriteString(style.Render(sourceText) + "\\n")
-		b.WriteString(fmt.Sprintf("   %s\\n\\n", source.desc))
+		b.WriteString(style.Render(sourceText) + "\n")
+		b.WriteString(fmt.Sprintf("   %s\n\n", source.desc))
 	}
 
 	return b.String()
@@ -93,19 +102,19 @@ func (m Model) viewListRepos() string {
 		sourceText = "📁 Local Repositories"
 	}
 
-	b.WriteString(fmt.Sprintf("Source: %s\\n\\n", sourceText))
+	b.WriteString(fmt.Sprintf("Source: %s\n\n", sourceText))
 
 	if m.err != nil {
-		b.WriteString(errorStyle.Render("❌ Error: "+m.err.Error()) + "\\n\\n")
+		b.WriteString(errorStyle.Render("❌ Error: "+m.err.Error()) + "\n\n")
 		return b.String()
 	}
 
 	if len(m.repos) == 0 {
-		b.WriteString("🔍 Loading repositories...\\n")
+		b.WriteString("🔍 Loading repositories...\n")
 		return b.String()
 	}
 
-	b.WriteString(fmt.Sprintf("Select packages to add (found %d repositories):\\n\\n", len(m.repos)))
+	b.WriteString(fmt.Sprintf("Select packages to add (found %d repositories):\n\n", len(m.repos)))
 
 	// Count selected
 	selectedCount := 0
@@ -116,7 +125,7 @@ func (m Model) viewListRepos() string {
 	}
 
 	if selectedCount > 0 {
-		b.WriteString(successStyle.Render(fmt.Sprintf("✅ Selected: %d packages", selectedCount)) + "\\n\\n")
+		b.WriteString(successStyle.Render(fmt.Sprintf("✅ Selected: %d packages", selectedCount)) + "\n\n")
 	}
 
 	// Show repositories
@@ -146,16 +155,16 @@ func (m Model) viewListRepos() string {
 		}
 
 		repoText := fmt.Sprintf("%s%s %s%s/%s", prefix, checkbox, privacy, repo.Owner, repo.Name)
-		b.WriteString(style.Render(repoText) + "\\n")
+		b.WriteString(style.Render(repoText) + "\n")
 
 		if repo.Desc != "" {
 			desc := repo.Desc
 			if len(desc) > 80 {
 				desc = desc[:77] + "..."
 			}
-			b.WriteString(fmt.Sprintf("     %s\\n", lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")).Render(desc)))
+			b.WriteString(fmt.Sprintf("     %s\n", lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")).Render(desc)))
 		}
-		b.WriteString("\\n")
+		b.WriteString("\n")
 	}
 
 	return b.String()
@@ -165,26 +174,26 @@ func (m Model) viewListRepos() string {
 func (m Model) viewEditSpecs() string {
 	var b strings.Builder
 
-	b.WriteString("✏️ Package Specifications\\n\\n")
+	b.WriteString("✏️ Package Specifications\n\n")
 
 	if len(m.edits) == 0 {
-		b.WriteString("No packages selected.\\n")
+		b.WriteString("No packages selected.\n")
 		return b.String()
 	}
 
-	b.WriteString(fmt.Sprintf("Preparing %d package(s) for installation:\\n\\n", len(m.edits)))
+	b.WriteString(fmt.Sprintf("Preparing %d package(s) for installation:\n\n", len(m.edits)))
 
 	for i, spec := range m.edits {
 		b.WriteString(boxStyle.Render(fmt.Sprintf(
-			"📦 Package %d/%d\\n"+
-				"   Name: %s\\n"+
-				"   URL:  %s\\n"+
+			"📦 Package %d/%d\n"+
+				"   Name: %s\n"+
+				"   URL:  %s\n"+
 				"   Ref:  %s",
 			i+1, len(m.edits),
 			spec.Name,
 			spec.URL,
 			spec.Ref,
-		)) + "\\n\\n")
+		)) + "\n\n")
 	}
 
 	return b.String()
@@ -194,21 +203,21 @@ func (m Model) viewEditSpecs() string {
 func (m Model) viewConfirm() string {
 	var b strings.Builder
 
-	b.WriteString("✅ Confirm Installation\\n\\n")
+	b.WriteString("✅ Confirm Installation\n\n")
 
 	project := m.projects[m.selectedProject]
-	b.WriteString(fmt.Sprintf("Project: %s\\n\\n", project.Path))
+	b.WriteString(fmt.Sprintf("Project: %s\n\n", project.Path))
 
-	b.WriteString("The following packages will be added:\\n\\n")
+	b.WriteString("The following packages will be added:\n\n")
 
 	for _, spec := range m.edits {
-		b.WriteString(fmt.Sprintf("  • %s (%s#%s)\\n", spec.Name, spec.URL, spec.Ref))
+		b.WriteString(fmt.Sprintf("  • %s (%s#%s)\n", spec.Name, spec.URL, spec.Ref))
 	}
 
-	b.WriteString("\\n")
+	b.WriteString("\n")
 	b.WriteString(warningStyle.Render("⚠️  This will modify your pubspec.yaml file"))
-	b.WriteString("\\n")
-	b.WriteString("   A backup will be created automatically.\\n\\n")
+	b.WriteString("\n")
+	b.WriteString("   A backup will be created automatically.\n\n")
 
 	b.WriteString("Do you want to continue? (y/N)")
 
@@ -219,10 +228,10 @@ func (m Model) viewConfirm() string {
 func (m Model) viewExecute() string {
 	var b strings.Builder
 
-	b.WriteString("⚡ Installing Packages\\n\\n")
+	b.WriteString("⚡ Installing Packages\n\n")
 
 	if len(m.results) == 0 {
-		b.WriteString("🔄 Starting installation...\\n")
+		b.WriteString("🔄 Starting installation...\n")
 		return b.String()
 	}
 
@@ -243,18 +252,18 @@ func (m Model) viewExecute() string {
 			message = result.Err
 		}
 
-		b.WriteString(style.Render(fmt.Sprintf("%s %s", status, message)) + "\\n")
+		b.WriteString(style.Render(fmt.Sprintf("%s %s", status, message)) + "\n")
 
 		// Show logs if available
 		for _, log := range result.Logs {
 			if strings.TrimSpace(log) != "" {
-				b.WriteString(fmt.Sprintf("   %s\\n",
+				b.WriteString(fmt.Sprintf("   %s\n",
 					lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")).Render(log)))
 			}
 		}
 
 		if i < len(m.results)-1 {
-			b.WriteString("\\n")
+			b.WriteString("\n")
 		}
 	}
 
@@ -265,7 +274,7 @@ func (m Model) viewExecute() string {
 func (m Model) viewSummary() string {
 	var b strings.Builder
 
-	b.WriteString("✨ Installation Complete\\n\\n")
+	b.WriteString("✨ Installation Complete\n\n")
 
 	// Show results summary
 	successCount := 0
@@ -280,14 +289,14 @@ func (m Model) viewSummary() string {
 	}
 
 	if errorCount == 0 {
-		b.WriteString(successStyle.Render(fmt.Sprintf("🎉 All %d packages installed successfully!", successCount)) + "\\n\\n")
+		b.WriteString(successStyle.Render(fmt.Sprintf("🎉 All %d packages installed successfully!", successCount)) + "\n\n")
 	} else {
-		b.WriteString(errorStyle.Render(fmt.Sprintf("⚠️  %d succeeded, %d failed", successCount, errorCount)) + "\\n\\n")
+		b.WriteString(errorStyle.Render(fmt.Sprintf("⚠️  %d succeeded, %d failed", successCount, errorCount)) + "\n\n")
 	}
 
 	// Show recommendations
 	if len(m.recos) > 0 {
-		b.WriteString("💡 Recommendations:\\n\\n")
+		b.WriteString("💡 Recommendations:\n\n")
 
 		for _, reco := range m.recos {
 			icon := "ℹ️"
@@ -305,15 +314,15 @@ func (m Model) viewSummary() string {
 				style = lipgloss.NewStyle().Foreground(lipgloss.Color("#13B9FD"))
 			}
 
-			b.WriteString(style.Render(fmt.Sprintf("%s %s", icon, reco.Message)) + "\\n")
+			b.WriteString(style.Render(fmt.Sprintf("%s %s", icon, reco.Message)) + "\n")
 			if reco.Rationale != "" {
-				b.WriteString(fmt.Sprintf("   %s\\n",
+				b.WriteString(fmt.Sprintf("   %s\n",
 					lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")).Render(reco.Rationale)))
 			}
-			b.WriteString("\\n")
+			b.WriteString("\n")
 		}
 	} else {
-		b.WriteString("✅ No recommendations - your project looks great!\\n\\n")
+		b.WriteString("✅ No recommendations - your project looks great!\n\n")
 	}
 
 	return b.String()

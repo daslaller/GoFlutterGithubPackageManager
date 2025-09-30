@@ -159,7 +159,7 @@ func extractProjectName(pubspecPath string) (string, error) {
 		return "", fmt.Errorf("failed to read pubspec.yaml: %w", err)
 	}
 
-	lines := strings.Split(string(content), "\\n")
+	lines := strings.Split(string(content), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "name:") {

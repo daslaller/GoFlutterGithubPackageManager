@@ -123,7 +123,7 @@ func parsePubspecLock(lockPath string) (*PubspecLock, error) {
 		Dependencies: make(map[string]PubspecLockDep),
 	}
 
-	lines := strings.Split(string(content), "\\n")
+	lines := strings.Split(string(content), "\n")
 	inPackages := false
 	currentPkg := ""
 	currentDep := PubspecLockDep{}
