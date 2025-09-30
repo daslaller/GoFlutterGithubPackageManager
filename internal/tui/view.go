@@ -13,18 +13,21 @@ func (m Model) viewDetectProject() string {
 
 	if m.err != nil {
 		b.WriteString(errorStyle.Render("❌ Error: "+m.err.Error()) + "\n\n")
+		b.WriteString("💡 Press 's' to skip project detection and continue anyway.\n")
 		return b.String()
 	}
 
 	if m.loading || len(m.projects) == 0 {
 		spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-		// Simple animation frame based on time (you could use a ticker for real animation)
-		frame := spinner[0] // For now, use first frame
-		
+		frame := spinner[m.spinnerIdx]
+
 		if m.loadingText != "" {
-			b.WriteString(fmt.Sprintf("%s %s\n", frame, m.loadingText))
+			b.WriteString(fmt.Sprintf("%s %s\n",
+				lipgloss.NewStyle().Foreground(lipgloss.Color("#13B9FD")).Render(frame),
+				m.loadingText))
 		} else {
-			b.WriteString(fmt.Sprintf("%s Scanning for Flutter projects...\n", frame))
+			b.WriteString(fmt.Sprintf("%s Scanning for Flutter projects...\n",
+				lipgloss.NewStyle().Foreground(lipgloss.Color("#13B9FD")).Render(frame)))
 		}
 		b.WriteString("   • Checking current directory\n")
 		b.WriteString("   • Scanning common development folders\n")
@@ -109,8 +112,18 @@ func (m Model) viewListRepos() string {
 		return b.String()
 	}
 
-	if len(m.repos) == 0 {
-		b.WriteString("🔍 Loading repositories...\n")
+	if m.loading || len(m.repos) == 0 {
+		spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		frame := spinner[m.spinnerIdx]
+
+		if m.loadingText != "" {
+			b.WriteString(fmt.Sprintf("%s %s\n",
+				lipgloss.NewStyle().Foreground(lipgloss.Color("#13B9FD")).Render(frame),
+				m.loadingText))
+		} else {
+			b.WriteString(fmt.Sprintf("%s Loading repositories...\n",
+				lipgloss.NewStyle().Foreground(lipgloss.Color("#13B9FD")).Render(frame)))
+		}
 		return b.String()
 	}
 
@@ -231,9 +244,20 @@ func (m Model) viewExecute() string {
 	b.WriteString("⚡ Installing Packages\n\n")
 
 	if len(m.results) == 0 {
-		b.WriteString("🔄 Starting installation...\n")
+		spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		frame := spinner[m.spinnerIdx]
+		b.WriteString(fmt.Sprintf("%s Starting installation...\n",
+			lipgloss.NewStyle().Foreground(lipgloss.Color("#13B9FD")).Render(frame)))
 		return b.String()
 	}
+
+	// Show progress bar
+	totalJobs := len(m.edits) + 1 // +1 for pub get
+	completedJobs := len(m.results)
+	progress := float64(completedJobs) / float64(totalJobs)
+
+	progressBar := m.renderProgressBar(progress, 40)
+	b.WriteString(fmt.Sprintf("Progress: %s %d/%d\n\n", progressBar, completedJobs, totalJobs))
 
 	for i, result := range m.results {
 		status := "🔄"
@@ -326,6 +350,38 @@ func (m Model) viewSummary() string {
 	}
 
 	return b.String()
+}
+
+// renderProgressBar creates a visual progress bar
+func (m Model) renderProgressBar(progress float64, width int) string {
+	if progress > 1.0 {
+		progress = 1.0
+	}
+	if progress < 0.0 {
+		progress = 0.0
+	}
+
+	filled := int(progress * float64(width))
+	empty := width - filled
+
+	bar := ""
+	for i := 0; i < filled; i++ {
+		bar += "█"
+	}
+	for i := 0; i < empty; i++ {
+		bar += "░"
+	}
+
+	percentage := int(progress * 100)
+
+	barStyle := lipgloss.NewStyle()
+	if progress == 1.0 {
+		barStyle = barStyle.Foreground(lipgloss.Color("#4CAF50")) // Green when complete
+	} else {
+		barStyle = barStyle.Foreground(lipgloss.Color("#13B9FD")) // Blue in progress
+	}
+
+	return fmt.Sprintf("%s %d%%", barStyle.Render(bar), percentage)
 }
 
 // Additional styles

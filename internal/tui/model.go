@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -41,8 +42,9 @@ type Model struct {
 	recos []core.Reco
 
 	// UI state
-	width  int
-	height int
+	width      int
+	height     int
+	spinnerIdx int
 }
 
 // Init implements tea.Model
@@ -52,6 +54,7 @@ func (m Model) Init() tea.Cmd {
 			return stepMsg{step: core.StepDetectProject}
 		}),
 		m.startLoading("Detecting Flutter projects..."),
+		m.tickSpinner(),
 	)
 }
 
@@ -77,12 +80,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selectedProject = 0
 			m.step = core.StepChooseSource
 			return m, m.getStepCommand()
+		} else if len(m.projects) == 0 {
+			// No projects found - show a message but allow user to continue
+			m.err = fmt.Errorf("no Flutter projects found. Create a new Flutter project with 'flutter create' or navigate to an existing one")
 		}
 		return m, nil
 
 	case loadingMsg:
 		m.loading = true
 		m.loadingText = msg.text
+		return m, nil
+
+	case tickMsg:
+		m.spinnerIdx = (m.spinnerIdx + 1) % 10 // 10 spinner frames
+		if m.loading {
+			return m, m.tickSpinner()
+		}
 		return m, nil
 
 	case reposMsg:
@@ -157,6 +170,13 @@ func (m Model) handleDetectProjectKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		if len(m.projects) > 0 {
+			m.step = core.StepChooseSource
+			return m, m.getStepCommand()
+		}
+	case "s", "S":
+		// Skip project detection and continue
+		if len(m.projects) == 0 {
+			m.err = nil // Clear any error
 			m.step = core.StepChooseSource
 			return m, m.getStepCommand()
 		}
@@ -271,6 +291,12 @@ func (m Model) getStepCommand() tea.Cmd {
 func (m Model) startLoading(text string) tea.Cmd {
 	return tea.Cmd(func() tea.Msg {
 		return loadingMsg{text: text}
+	})
+}
+
+func (m Model) tickSpinner() tea.Cmd {
+	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
+		return tickMsg{}
 	})
 }
 
@@ -446,7 +472,10 @@ func (m Model) getStepView() string {
 func (m Model) getFooter() string {
 	switch m.step {
 	case core.StepDetectProject:
-		return "↑/↓ navigate • enter select • q quit"
+		if len(m.projects) == 0 && !m.loading {
+			return "s skip detection • q quit"
+		}
+		return "↑/↓ navigate • enter select • s skip • q quit"
 	case core.StepChooseSource:
 		return "↑/↓ navigate • enter select • q quit"
 	case core.StepListRepos:
@@ -499,6 +528,8 @@ type messageMsg struct {
 type loadingMsg struct {
 	text string
 }
+
+type tickMsg struct{}
 
 // Styles
 var (
