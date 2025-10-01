@@ -48,7 +48,8 @@ type Step int
 const (
 	StepMainMenu Step = iota
 	StepChooseSource
-	StepListRepos
+	StepSelectGitHubProject // Single-select GitHub repo to clone as project
+	StepListRepos           // Multi-select GitHub repos as dependencies
 	StepEditSpecs
 	StepConfirm
 	StepExecute

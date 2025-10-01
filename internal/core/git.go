@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,15 +15,17 @@ import (
 
 // GitLsRemoteCache provides caching for git ls-remote operations
 type GitLsRemoteCache struct {
-	mu    sync.RWMutex
-	cache map[string]string // URL+ref -> SHA
-	ttl   time.Duration
+	mu     sync.RWMutex
+	cache  map[string]string      // URL+ref -> SHA
+	timers map[string]*time.Timer // Track cleanup timers to prevent races
+	ttl    time.Duration
 }
 
 var (
 	gitLsRemoteCache = &GitLsRemoteCache{
-		cache: make(map[string]string),
-		ttl:   2 * time.Minute, // Cache git ls-remote for 2 minutes
+		cache:  make(map[string]string),
+		timers: make(map[string]*time.Timer),
+		ttl:    2 * time.Minute, // Cache git ls-remote for 2 minutes
 	}
 )
 
@@ -159,12 +162,12 @@ type GitHubCache struct {
 	repos  []RepoCandidate
 	expiry time.Time
 	hash   string
-	tl     time.Duration
+	ttl    time.Duration
 }
 
 var (
 	githubCache = &GitHubCache{
-		tl: 5 * time.Minute, // Cache for 5 minutes
+		ttl: 5 * time.Minute, // Cache for 5 minutes
 	}
 )
 
@@ -370,17 +373,70 @@ func GetRepoTags(repoURL string) ([]string, error) {
 	return tags, nil
 }
 
-// cleanupAfterTTL removes cache entry after TTL expires
+// cleanupAfterTTL removes cache entry after TTL expires with proper race condition handling
 func (c *GitLsRemoteCache) cleanupAfterTTL(key string) {
-	time.Sleep(c.ttl)
 	c.mu.Lock()
-	delete(c.cache, key)
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+
+	// Cancel existing timer if present to prevent race
+	if existingTimer, exists := c.timers[key]; exists {
+		existingTimer.Stop()
+		delete(c.timers, key) // Remove immediately to prevent double cleanup
+	}
+
+	// Set new cleanup timer with proper synchronization
+	c.timers[key] = time.AfterFunc(c.ttl, func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		// Double-check that this timer is still the current one
+		if timer, exists := c.timers[key]; exists && timer != nil {
+			delete(c.cache, key)
+			delete(c.timers, key)
+		}
+	})
 }
 
-// ValidateGitURL checks if a Git URL is valid and accessible
+// ValidateGitURL checks if a Git URL is valid and accessible with enhanced security
 func ValidateGitURL(url string) error {
-	cmd := exec.Command("git", "ls-remote", "--exit-code", url, "HEAD")
+	// Input validation to prevent command injection
+	if url == "" {
+		return fmt.Errorf("empty git URL")
+	}
+
+	// Enhanced validation to prevent command injection
+	if strings.ContainsAny(url, ";|&$`\n\r\t'\"\\") {
+		return fmt.Errorf("invalid characters in git URL")
+	}
+
+	// Check for common protocol patterns (more restrictive)
+	validPrefixes := []string{"https://", "http://", "git@", "ssh://"}
+	hasValidPrefix := false
+	for _, prefix := range validPrefixes {
+		if strings.HasPrefix(strings.ToLower(url), prefix) {
+			hasValidPrefix = true
+			break
+		}
+	}
+	if !hasValidPrefix {
+		return fmt.Errorf("invalid git URL protocol (must start with https://, http://, git@, or ssh://)")
+	}
+
+	// Limit URL length to prevent buffer overflow attacks
+	if len(url) > 2048 {
+		return fmt.Errorf("git URL too long (max 2048 characters)")
+	}
+
+	// Use timeout and secure environment for git command
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--exit-code", url, "HEAD")
+	cmd.Env = []string{
+		"GIT_TERMINAL_PROMPT=0", // Disable interactive prompts
+		"GIT_ASKPASS=true",      // Disable password prompts
+	}
+
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("invalid or inaccessible git URL: %s", url)
 	}

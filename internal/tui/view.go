@@ -191,23 +191,11 @@ func (m Model) viewChooseSource() string {
 	return b.String()
 }
 
-// viewListRepos renders the repository listing step
-func (m Model) viewListRepos() string {
+// viewSelectGitHubProject renders the GitHub project selection step (single-select)
+func (m Model) viewSelectGitHubProject() string {
 	var b strings.Builder
 
-	sourceText := ""
-	switch m.source {
-	case 0:
-		sourceText = "📦 GitHub Repositories"
-	case 1:
-		sourceText = "🔗 Manual URL Entry"
-	case 2:
-		sourceText = "📁 Local Repositories"
-	}
-
-	b.WriteString(fmt.Sprintf("Source: %s\n\n", sourceText))
-
-	if m.err != nil {
+	if m.err != nil && !strings.Contains(m.err.Error(), "not implemented yet") {
 		b.WriteString(errorStyle.Render("❌ Error: "+m.err.Error()) + "\n\n")
 		return b.String()
 	}
@@ -221,40 +209,41 @@ func (m Model) viewListRepos() string {
 				lipgloss.NewStyle().Foreground(lipgloss.Color("#13B9FD")).Render(frame),
 				m.loadingText))
 		} else {
-			b.WriteString(fmt.Sprintf("%s Loading repositories...\n",
+			b.WriteString(fmt.Sprintf("%s Loading GitHub repositories...\n",
 				lipgloss.NewStyle().Foreground(lipgloss.Color("#13B9FD")).Render(frame)))
 		}
 		return b.String()
 	}
 
-	b.WriteString(fmt.Sprintf("Select packages to add (found %d repositories):\n\n", len(m.repos)))
+	b.WriteString(fmt.Sprintf("Select repository to clone as project (found %d repositories):\n", len(m.repos)))
+	b.WriteString("Use ↑/↓ or j/k to navigate, SPACE or ENTER to select, q to quit\n\n")
 
-	// Count selected
-	selectedCount := 0
-	for _, selected := range m.picks {
-		if selected {
-			selectedCount++
-		}
+	// Calculate window bounds like shell script
+	windowEnd := m.windowStart + m.windowSize
+	if windowEnd > len(m.repos) {
+		windowEnd = len(m.repos)
 	}
 
-	if selectedCount > 0 {
-		b.WriteString(successStyle.Render(fmt.Sprintf("✅ Selected: %d packages", selectedCount)) + "\n\n")
+	// Show 'hidden above' indicator
+	if m.windowStart > 0 {
+		b.WriteString(fmt.Sprintf("... (%d more above) ...\n\n", m.windowStart))
 	}
 
 	// Pre-compiled styles for better performance
 	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
 
-	// Show repositories with optimized rendering
-	for i, repo := range m.repos {
+	// Show repositories in current window (single-select mode)
+	for i := m.windowStart; i < windowEnd; i++ {
+		repo := m.repos[i]
 		var prefix, checkbox, privacy string
 		var style lipgloss.Style
 
-		// Determine checkbox and style
+		// Single-select checkbox (radio button style)
 		if m.picks[i] {
-			checkbox = "☑"
+			checkbox = "[●]" // Selected radio button
 			style = successStyle
 		} else {
-			checkbox = "☐"
+			checkbox = "[ ]" // Empty radio button
 			style = lipgloss.NewStyle()
 		}
 
@@ -299,6 +288,214 @@ func (m Model) viewListRepos() string {
 			b.WriteString("\n")
 		}
 		b.WriteString("\n")
+	}
+
+	// Show 'hidden below' indicator
+	if windowEnd < len(m.repos) {
+		remaining := len(m.repos) - windowEnd
+		b.WriteString(fmt.Sprintf("... (%d more below) ...\n\n", remaining))
+	}
+
+	// Show cursor position like shell script
+	if m.cursor < len(m.repos) {
+		currentRepo := m.repos[m.cursor]
+		b.WriteString(fmt.Sprintf("Cursor: %s/%s\n", currentRepo.Owner, currentRepo.Name))
+	}
+
+	// Show selection (single-select mode)
+	selectedRepo := ""
+	for i, selected := range m.picks {
+		if selected && i < len(m.repos) {
+			repo := m.repos[i]
+			selectedRepo = fmt.Sprintf("%s/%s", repo.Owner, repo.Name)
+			break
+		}
+	}
+
+	if selectedRepo != "" {
+		b.WriteString(fmt.Sprintf("Selected: %s\n", selectedRepo))
+
+		// Show "not implemented" message if there's an error about it
+		if m.err != nil && strings.Contains(m.err.Error(), "not implemented yet") {
+			b.WriteString("\n")
+			b.WriteString(warningStyle.Render("⚠️  " + m.err.Error()))
+			b.WriteString("\n")
+		}
+	} else {
+		b.WriteString("Selected: none\n")
+	}
+
+	return b.String()
+}
+
+// viewListRepos renders the repository listing step
+func (m Model) viewListRepos() string {
+	var b strings.Builder
+
+	sourceText := ""
+	switch m.source {
+	case 0:
+		sourceText = "📦 GitHub Repositories"
+	case 1:
+		sourceText = "🔗 Manual URL Entry"
+	case 2:
+		sourceText = "📁 Local Repositories"
+	}
+
+	b.WriteString(fmt.Sprintf("Source: %s\n\n", sourceText))
+
+	if m.err != nil {
+		b.WriteString(errorStyle.Render("❌ Error: "+m.err.Error()) + "\n\n")
+		return b.String()
+	}
+
+	if m.loading || len(m.repos) == 0 {
+		spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		frame := spinner[m.spinnerIdx]
+
+		if m.loadingText != "" {
+			b.WriteString(fmt.Sprintf("%s %s\n",
+				lipgloss.NewStyle().Foreground(lipgloss.Color("#13B9FD")).Render(frame),
+				m.loadingText))
+		} else {
+			b.WriteString(fmt.Sprintf("%s Loading repositories...\n",
+				lipgloss.NewStyle().Foreground(lipgloss.Color("#13B9FD")).Render(frame)))
+		}
+		return b.String()
+	}
+
+	b.WriteString(fmt.Sprintf("Select packages to add (found %d repositories):\n", len(m.repos)))
+	if m.singleSelect {
+		b.WriteString("Use ↑/↓ or j/k to navigate, SPACE or ENTER to select, q to quit\n\n")
+	} else {
+		b.WriteString("Use ↑/↓ or j/k to navigate, SPACE to select/deselect, ENTER to confirm, q to quit\n\n")
+	}
+
+	// Count selected
+	selectedCount := 0
+	for _, selected := range m.picks {
+		if selected {
+			selectedCount++
+		}
+	}
+
+	// Calculate window bounds like shell script
+	windowEnd := m.windowStart + m.windowSize
+	if windowEnd > len(m.repos) {
+		windowEnd = len(m.repos)
+	}
+
+	// Show 'hidden above' indicator
+	if m.windowStart > 0 {
+		b.WriteString(fmt.Sprintf("... (%d more above) ...\n\n", m.windowStart))
+	}
+
+	// Pre-compiled styles for better performance
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
+
+	// Show repositories in current window
+	for i := m.windowStart; i < windowEnd; i++ {
+		repo := m.repos[i]
+		var prefix, checkbox, privacy string
+		var style lipgloss.Style
+
+		// Determine checkbox and style based on mode
+		if m.singleSelect {
+			// Single-select mode: radio button style
+			if m.picks[i] {
+				checkbox = "[●]" // Selected radio button
+				style = successStyle
+			} else {
+				checkbox = "[ ]" // Empty radio button
+				style = lipgloss.NewStyle()
+			}
+		} else {
+			// Multi-select mode: checkbox style
+			if m.picks[i] {
+				checkbox = "☑"
+				style = successStyle
+			} else {
+				checkbox = "☐"
+				style = lipgloss.NewStyle()
+			}
+		}
+
+		// Determine prefix and override style if cursor
+		if i == m.cursor {
+			prefix = "► "
+			if !m.picks[i] {
+				style = selectedStyle
+			}
+		} else {
+			prefix = "  "
+		}
+
+		// Privacy indicator
+		if repo.Privacy == "private" {
+			privacy = "🔒 "
+		} else {
+			privacy = "🔓 "
+		}
+
+		// Build repo text efficiently
+		var repoBuilder strings.Builder
+		repoBuilder.WriteString(prefix)
+		repoBuilder.WriteString(checkbox)
+		repoBuilder.WriteString(" ")
+		repoBuilder.WriteString(privacy)
+		repoBuilder.WriteString(repo.Owner)
+		repoBuilder.WriteString("/")
+		repoBuilder.WriteString(repo.Name)
+
+		b.WriteString(style.Render(repoBuilder.String()))
+		b.WriteString("\n")
+
+		// Add description if present
+		if repo.Desc != "" {
+			desc := repo.Desc
+			if len(desc) > 80 {
+				desc = desc[:77] + "..."
+			}
+			b.WriteString("     ")
+			b.WriteString(descStyle.Render(desc))
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+
+	// Show 'hidden below' indicator
+	if windowEnd < len(m.repos) {
+		remaining := len(m.repos) - windowEnd
+		b.WriteString(fmt.Sprintf("... (%d more below) ...\n\n", remaining))
+	}
+
+	// Show cursor position like shell script
+	if m.cursor < len(m.repos) {
+		currentRepo := m.repos[m.cursor]
+		b.WriteString(fmt.Sprintf("Cursor: %s/%s\n", currentRepo.Owner, currentRepo.Name))
+	}
+
+	// Show selection count and selected items
+	b.WriteString(fmt.Sprintf("Selected: %d items\n", selectedCount))
+	if selectedCount > 0 {
+		b.WriteString("\nCurrently selected:\n")
+		selectedItems := make([]string, 0, selectedCount)
+		for i, selected := range m.picks {
+			if selected && i < len(m.repos) {
+				repo := m.repos[i]
+				selectedItems = append(selectedItems, fmt.Sprintf("  ✓ %s/%s", repo.Owner, repo.Name))
+			}
+		}
+		// Limit displayed selected items to avoid overflow
+		maxShow := 5
+		for i, item := range selectedItems {
+			if i >= maxShow {
+				remaining := len(selectedItems) - maxShow
+				b.WriteString(fmt.Sprintf("  ... and %d more\n", remaining))
+				break
+			}
+			b.WriteString(item + "\n")
+		}
 	}
 
 	return b.String()

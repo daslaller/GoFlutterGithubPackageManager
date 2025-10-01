@@ -1,6 +1,6 @@
 module github.com/daslaller/GoFlutterGithubPackageManager
 
-go 1.25
+go 1.25.1
 
 require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect

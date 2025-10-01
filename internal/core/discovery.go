@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 // NearestPubspec walks up from the current directory to find the nearest pubspec.yaml
@@ -53,8 +55,16 @@ func NearestPubspec(startDir string) (*Project, error) {
 }
 
 // ScanCommonRoots scans common development directories for Flutter projects
-// This mirrors the shell script's local project discovery with concurrent scanning
+// This mirrors the shell script's local project discovery with concurrent scanning and proper cleanup
 func ScanCommonRoots() ([]Project, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	return ScanCommonRootsWithContext(ctx)
+}
+
+// ScanCommonRootsWithContext scans with context for cancellation and timeout
+func ScanCommonRootsWithContext(ctx context.Context) ([]Project, error) {
 	roots := CommonRoots()
 	numWorkers := runtime.NumCPU() // Use all available CPU cores
 	if numWorkers > len(roots) {
@@ -66,35 +76,64 @@ func ScanCommonRoots() ([]Project, error) {
 	resultChan := make(chan []Project, len(roots))
 	errorChan := make(chan error, len(roots))
 
-	// Start workers
+	// Start workers with context cancellation
 	var wg sync.WaitGroup
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for root := range rootChan {
-				if _, err := os.Stat(root); os.IsNotExist(err) {
-					resultChan <- []Project{} // Skip non-existent directories
-					continue
-				}
+			for {
+				select {
+				case <-ctx.Done():
+					return // Exit gracefully on context cancellation
+				case root, ok := <-rootChan:
+					if !ok {
+						return // Channel closed
+					}
 
-				rootProjects, err := scanDirectoryForProjects(root, 3) // Max depth of 3
-				if err != nil {
-					errorChan <- err
-					resultChan <- []Project{} // Continue with empty result
-					continue
-				}
+					if _, err := os.Stat(root); os.IsNotExist(err) {
+						select {
+						case resultChan <- []Project{}: // Skip non-existent directories
+						case <-ctx.Done():
+							return
+						}
+						continue
+					}
 
-				resultChan <- rootProjects
+					rootProjects, err := scanDirectoryForProjectsWithContext(ctx, root, 3)
+					if err != nil {
+						select {
+						case errorChan <- err:
+						case <-ctx.Done():
+							return
+						}
+						select {
+						case resultChan <- []Project{}: // Continue with empty result
+						case <-ctx.Done():
+							return
+						}
+						continue
+					}
+
+					select {
+					case resultChan <- rootProjects:
+					case <-ctx.Done():
+						return
+					}
+				}
 			}
 		}()
 	}
 
-	// Send work to workers
+	// Send work to workers with context awareness
 	go func() {
 		defer close(rootChan)
 		for _, root := range roots {
-			rootChan <- root
+			select {
+			case rootChan <- root:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
@@ -105,29 +144,26 @@ func ScanCommonRoots() ([]Project, error) {
 		close(errorChan)
 	}()
 
-	// Collect results
+	// Collect results with timeout protection
 	var projects []Project
-	for i := 0; i < len(roots); i++ {
+	resultsReceived := 0
+
+	for resultsReceived < len(roots) {
 		select {
-		case result := <-resultChan:
+		case <-ctx.Done():
+			return projects, ctx.Err()
+		case result, ok := <-resultChan:
+			if !ok {
+				break // Channel closed
+			}
 			projects = append(projects, result...)
+			resultsReceived++
 		case <-errorChan:
 			// Log error but continue with other roots
-			continue
+			resultsReceived++
 		}
 	}
 
-	// Drain any remaining errors
-	for {
-		select {
-		case <-errorChan:
-			// Ignore remaining errors
-		default:
-			goto done
-		}
-	}
-
-done:
 	return projects, nil
 }
 
@@ -154,6 +190,13 @@ func CommonRoots() []string {
 
 // scanDirectoryForProjects recursively scans a directory for Flutter projects with optimized I/O
 func scanDirectoryForProjects(dir string, maxDepth int) ([]Project, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return scanDirectoryForProjectsWithContext(ctx, dir, maxDepth)
+}
+
+// scanDirectoryForProjectsWithContext recursively scans with context cancellation
+func scanDirectoryForProjectsWithContext(ctx context.Context, dir string, maxDepth int) ([]Project, error) {
 	var projects []Project
 
 	if maxDepth <= 0 {
@@ -206,15 +249,28 @@ func scanDirectoryForProjects(dir string, maxDepth int) ([]Project, error) {
 		validDirs = append(validDirs, name)
 	}
 
+	// Check context before proceeding
+	select {
+	case <-ctx.Done():
+		return projects, ctx.Err()
+	default:
+	}
+
 	// Process valid directories concurrently if there are enough of them
 	if len(validDirs) > 4 && maxDepth > 1 {
-		return scanDirectoriesConcurrent(dir, validDirs, maxDepth-1)
+		return scanDirectoriesConcurrentWithContext(ctx, dir, validDirs, maxDepth-1)
 	}
 
 	// Scan subdirectories sequentially for small numbers
 	for _, name := range validDirs {
+		select {
+		case <-ctx.Done():
+			return projects, ctx.Err()
+		default:
+		}
+
 		subDir := filepath.Join(dir, name)
-		subProjects, err := scanDirectoryForProjects(subDir, maxDepth-1)
+		subProjects, err := scanDirectoryForProjectsWithContext(ctx, subDir, maxDepth-1)
 		if err != nil {
 			// Continue with other directories on error
 			continue
@@ -228,6 +284,13 @@ func scanDirectoryForProjects(dir string, maxDepth int) ([]Project, error) {
 
 // scanDirectoriesConcurrent scans multiple directories concurrently for better performance
 func scanDirectoriesConcurrent(baseDir string, dirNames []string, maxDepth int) ([]Project, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return scanDirectoriesConcurrentWithContext(ctx, baseDir, dirNames, maxDepth)
+}
+
+// scanDirectoriesConcurrentWithContext scans with proper context handling
+func scanDirectoriesConcurrentWithContext(ctx context.Context, baseDir string, dirNames []string, maxDepth int) ([]Project, error) {
 	type result struct {
 		projects []Project
 		err      error
@@ -241,25 +304,42 @@ func scanDirectoriesConcurrent(baseDir string, dirNames []string, maxDepth int) 
 	dirChan := make(chan string, len(dirNames))
 	resultChan := make(chan result, len(dirNames))
 
-	// Start workers
+	// Start workers with context cancellation
 	var wg sync.WaitGroup
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for dirName := range dirChan {
-				subDir := filepath.Join(baseDir, dirName)
-				subProjects, err := scanDirectoryForProjects(subDir, maxDepth)
-				resultChan <- result{projects: subProjects, err: err}
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case dirName, ok := <-dirChan:
+					if !ok {
+						return
+					}
+					subDir := filepath.Join(baseDir, dirName)
+					subProjects, err := scanDirectoryForProjectsWithContext(ctx, subDir, maxDepth)
+
+					select {
+					case resultChan <- result{projects: subProjects, err: err}:
+					case <-ctx.Done():
+						return
+					}
+				}
 			}
 		}()
 	}
 
-	// Send work
+	// Send work with context awareness
 	go func() {
 		defer close(dirChan)
 		for _, dirName := range dirNames {
-			dirChan <- dirName
+			select {
+			case dirChan <- dirName:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
@@ -269,14 +349,24 @@ func scanDirectoriesConcurrent(baseDir string, dirNames []string, maxDepth int) 
 		close(resultChan)
 	}()
 
-	// Collect results
+	// Collect results with timeout protection
 	var allProjects []Project
-	for i := 0; i < len(dirNames); i++ {
-		res := <-resultChan
-		if res.err == nil {
-			allProjects = append(allProjects, res.projects...)
+	resultsReceived := 0
+
+	for resultsReceived < len(dirNames) {
+		select {
+		case <-ctx.Done():
+			return allProjects, ctx.Err()
+		case res, ok := <-resultChan:
+			if !ok {
+				break
+			}
+			if res.err == nil {
+				allProjects = append(allProjects, res.projects...)
+			}
+			resultsReceived++
+			// Ignore errors and continue - same behavior as sequential version
 		}
-		// Ignore errors and continue - same behavior as sequential version
 	}
 
 	return allProjects, nil
@@ -350,7 +440,8 @@ func ValidateProject(projectPath string, autoFix bool) ([]string, error) {
 	if _, err := os.Stat(mainPath); os.IsNotExist(err) {
 		messages = append(messages, "lib/main.dart not found")
 		if autoFix {
-			mainContent := `import 'package:flutter/material.dart';
+			mainContent := `
+import 'package:flutter/material.dart';
 
 void main() {
   runApp(const MyApp());

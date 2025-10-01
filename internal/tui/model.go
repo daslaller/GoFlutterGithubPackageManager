@@ -46,6 +46,13 @@ type Model struct {
 	height      int
 	spinnerIdx  int
 	lastSpinner time.Time
+
+	// Window pagination for lists
+	windowStart int
+	windowSize  int
+
+	// List modes
+	singleSelect bool
 }
 
 // Init implements tea.Model
@@ -115,6 +122,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.repos = msg.repos
 		m.picks = make(map[int]bool)
+		// Reset window and cursor for new repository list
+		m.cursor = 0
+		m.windowStart = 0
+		// Set single-select mode if we're selecting a GitHub project
+		m.singleSelect = (m.step == core.StepSelectGitHubProject)
 		return m, nil
 
 	case specsMsg:
@@ -155,6 +167,8 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleMainMenuKeys(msg)
 	case core.StepChooseSource:
 		return m.handleChooseSourceKeys(msg)
+	case core.StepSelectGitHubProject:
+		return m.handleSelectGitHubProjectKeys(msg)
 	case core.StepListRepos:
 		return m.handleListReposKeys(msg)
 	case core.StepEditSpecs:
@@ -220,9 +234,8 @@ func (m Model) handleMenuSelection() (tea.Model, tea.Cmd) {
 			m.startLoading("Scanning directories for Flutter projects..."),
 			tea.Cmd(m.detectProjectsAsync),
 		)
-	case 1: // "2. GitHub repo" - use GitHub repositories as source for packages
-		m.step = core.StepListRepos
-		m.source = core.SourceGitHub
+	case 1: // "2. GitHub repo" - single-select GitHub repository to clone as project
+		m.step = core.StepSelectGitHubProject
 		return m, m.getStepCommand()
 	case 2: // "3. Configure search" - configure search settings
 		// TODO: Implement configuration
@@ -268,15 +281,61 @@ func (m Model) handleChooseSourceKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) handleSelectGitHubProjectKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+			// Adjust window if cursor goes above visible area
+			if m.cursor < m.windowStart {
+				m.windowStart = m.cursor
+			}
+		}
+	case "down", "j":
+		if m.cursor < len(m.repos)-1 {
+			m.cursor++
+			// Adjust window if cursor goes below visible area
+			if m.cursor >= m.windowStart+m.windowSize {
+				m.windowStart = m.cursor - m.windowSize + 1
+			}
+		}
+	case " ", "enter": // Space or Enter to select in single-select mode
+		if m.cursor < len(m.repos) {
+			// Check if this repo is already selected
+			if m.picks[m.cursor] {
+				// Already selected - proceed with cloning (or show not implemented)
+				m.err = fmt.Errorf("GitHub project cloning not implemented yet - would clone: %s/%s",
+					m.repos[m.cursor].Owner, m.repos[m.cursor].Name)
+				return m, nil
+			} else {
+				// Single-select: clear all and select current
+				m.picks = make(map[int]bool)
+				m.picks[m.cursor] = true
+				// Clear any existing error
+				m.err = nil
+			}
+		}
+	}
+	return m, nil
+}
+
 func (m Model) handleListReposKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
+			// Adjust window if cursor goes above visible area
+			if m.cursor < m.windowStart {
+				m.windowStart = m.cursor
+			}
 		}
 	case "down", "j":
 		if m.cursor < len(m.repos)-1 {
 			m.cursor++
+			// Adjust window if cursor goes below visible area
+			if m.cursor >= m.windowStart+m.windowSize {
+				m.windowStart = m.cursor - m.windowSize + 1
+			}
 		}
 	case " ": // Space to toggle
 		if m.picks == nil {
@@ -322,7 +381,7 @@ func (m Model) handleSummaryKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter", "r":
 		// Restart
 		return m, tea.Cmd(func() tea.Msg {
-			return stepMsg{step: core.StepDetectProject}
+			return stepMsg{step: core.StepMainMenu}
 		})
 	}
 	return m, nil
@@ -335,6 +394,11 @@ func (m Model) getStepCommand() tea.Cmd {
 		return nil // Main menu is UI only
 	case core.StepChooseSource:
 		return nil // UI only
+	case core.StepSelectGitHubProject:
+		return tea.Batch(
+			m.startLoading("Fetching GitHub repositories..."),
+			tea.Cmd(m.listGitHubReposForProject),
+		)
 	case core.StepListRepos:
 		return tea.Batch(
 			m.startLoading("Fetching repositories..."),
@@ -392,6 +456,16 @@ func (m Model) detectProjectsAsync() tea.Msg {
 // Legacy function for compatibility
 func (m Model) detectProjects() tea.Msg {
 	return m.detectProjectsAsync()
+}
+
+// listGitHubReposForProject fetches GitHub repos for single-select project cloning
+func (m Model) listGitHubReposForProject() tea.Msg {
+	repos, err := core.ListGitHubRepos(m.logger)
+	if err != nil {
+		return errorMsg{err: err}
+	}
+	// Set single-select mode and return repos
+	return reposMsg{repos: repos}
 }
 
 func (m Model) listReposAsync() tea.Msg {
@@ -545,15 +619,17 @@ func (m Model) getStepText() string {
 	case core.StepMainMenu:
 		return "🎯 Flutter Package Manager - Main Menu"
 	case core.StepChooseSource:
-		return "Step 1/5: 📂 Choose Source"
+		return "Step 1/6: 📂 Choose Source"
+	case core.StepSelectGitHubProject:
+		return "🐙 Select GitHub Project to Clone"
 	case core.StepListRepos:
-		return "Step 2/5: 📋 List Repositories"
+		return "Step 2/6: 📋 List Repositories"
 	case core.StepEditSpecs:
-		return "Step 3/5: ✏️ Edit Specifications"
+		return "Step 3/6: ✏️ Edit Specifications"
 	case core.StepConfirm:
-		return "Step 4/5: ✅ Confirm"
+		return "Step 4/6: ✅ Confirm"
 	case core.StepExecute:
-		return "Step 5/5: ⚡ Execute"
+		return "Step 5/6: ⚡ Execute"
 	case core.StepSummary:
 		return "✨ Summary & Recommendations"
 	}
@@ -566,6 +642,8 @@ func (m Model) getStepView() string {
 		return m.viewMainMenu()
 	case core.StepChooseSource:
 		return m.viewChooseSource()
+	case core.StepSelectGitHubProject:
+		return m.viewSelectGitHubProject()
 	case core.StepListRepos:
 		return m.viewListRepos()
 	case core.StepEditSpecs:
@@ -590,6 +668,8 @@ func (m Model) getFooter() string {
 		}
 	case core.StepChooseSource:
 		return "↑/↓ navigate • enter select • q quit"
+	case core.StepSelectGitHubProject:
+		return "↑/↓ navigate • space/enter select • q quit"
 	case core.StepListRepos:
 		return "↑/↓ navigate • space toggle • enter confirm • q quit"
 	case core.StepEditSpecs:
@@ -670,10 +750,11 @@ var (
 // Run starts the TUI application
 func Run(cfg core.Config, logger *core.Logger) error {
 	m := Model{
-		step:   core.StepDetectProject,
-		cfg:    cfg,
-		logger: logger,
-		cursor: 0,
+		step:       core.StepMainMenu,
+		cfg:        cfg,
+		logger:     logger,
+		cursor:     0,
+		windowSize: 10, // Default window size like shell script
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
