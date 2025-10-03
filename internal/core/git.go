@@ -245,7 +245,9 @@ func (c *GitHubCache) Get() []RepoCandidate {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if time.Now().Before(c.expiry) && len(c.repos) > 0 {
+	if time.Now().Before(c.expiry) && len(
+
+		c.repos) > 0 {
 		return c.repos
 	}
 
@@ -395,6 +397,16 @@ func (c *GitLsRemoteCache) cleanupAfterTTL(key string) {
 			delete(c.timers, key)
 		}
 	})
+}
+
+// GetGitVersion returns the git version string
+func GetGitVersion() (string, error) {
+	cmd := exec.Command("git", "--version")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git not available: %w", err)
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 // ValidateGitURL checks if a Git URL is valid and accessible with enhanced security

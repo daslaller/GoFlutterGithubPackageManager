@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "Bash(./flutter-pm.exe --version)",
-      "Bash(./flutter-pm.exe status)"
+      "Bash(./flutter-pm.exe status)",
+      "Bash(go build:*)",
+      "Bash(go mod:*)",
+      "Bash(go get:*)",
+      "Bash(mv:*)",
+      "Bash(mkdir:*)",
+      "Bash(./test-env.exe)"
     ],
     "defaultMode": "acceptEdits"
   }
