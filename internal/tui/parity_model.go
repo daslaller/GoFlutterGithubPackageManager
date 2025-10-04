@@ -203,6 +203,8 @@ func (m ParityModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.currentStep {
 		case StepMainMenu:
 			return m.handleMainMenuKeys(msg)
+		case StepGitHubRepo:
+			return m.handleGitHubRepoLoadingKeys(msg)
 		case StepGitHubRepoSelection:
 			return m.handleGitHubRepoKeys(msg)
 		case StepPackageSelection:
@@ -310,6 +312,8 @@ func (m ParityModel) View() string {
 	switch m.currentStep {
 	case StepMainMenu:
 		sections = append(sections, m.viewMainMenu())
+	case StepGitHubRepo:
+		sections = append(sections, m.viewGitHubRepoLoading())
 	case StepGitHubRepoSelection:
 		sections = append(sections, m.viewGitHubRepoSelection())
 	case StepPackageSelection:
@@ -334,6 +338,18 @@ func (m ParityModel) View() string {
 }
 
 // Main menu with exact shell script options and timeout
+func (m ParityModel) viewGitHubRepoLoading() string {
+	var b strings.Builder
+
+	b.WriteString("🔍 Fetching GitHub repositories...\n\n")
+
+	if len(m.repos) > 0 {
+		b.WriteString(fmt.Sprintf("ℹ️ [github] Found %d repositories", len(m.repos)))
+	}
+
+	return b.String()
+}
+
 func (m ParityModel) viewMainMenu() string {
 	var b strings.Builder
 
@@ -1176,7 +1192,26 @@ func (m ParityModel) viewExecuteChanges() string {
 	return b.String()
 }
 
-// Run starts the parity TUI application
+func (m ParityModel) handleGitHubRepoLoadingKeys(msg tea.KeyMsg) (ParityModel, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		// Return to main menu
+		m.currentStep = StepMainMenu
+		m.loading = false
+		return m, m.updateMainMenu()
+	}
+	// During loading, most keys are ignored except quit and escape
+	return m, nil
+}
+
+// Run starts the TUI application (main entry point)
+func Run(cfg core.Config, logger *core.Logger) error {
+	return RunParity(cfg, logger)
+}
+
+// RunParity starts the parity TUI application
 func RunParity(cfg core.Config, logger *core.Logger) error {
 	m := NewParityModel(cfg, logger)
 	p := tea.NewProgram(m, tea.WithAltScreen())

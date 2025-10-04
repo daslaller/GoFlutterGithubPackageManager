@@ -11,7 +11,11 @@
       "Bash(./test-env.exe)",
       "Bash(./flutter-pm-parity.exe --version)",
       "Bash(go run:*)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(rm:*)",
+      "Bash(./flutter-pm-final.exe --version)",
+      "Bash(true)",
+      "Bash(./flutter-pm-verified.exe --version)"
     ],
     "defaultMode": "acceptEdits"
   }
