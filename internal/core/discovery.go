@@ -1,3 +1,20 @@
+// Package core/discovery.go - Project and Repository Discovery Logic
+//
+// This file implements project discovery functionality that matches the shell script
+// behavior exactly. It provides efficient mechanisms to find Flutter/Dart projects
+// in the local filesystem and discover common project root directories.
+//
+// Key features:
+// - NearestPubspec: Walk up directory tree to find closest pubspec.yaml
+// - ScanCommonRoots: Scan typical development directories for projects
+// - Concurrent scanning with proper error handling and timeouts
+// - Cross-platform support (Windows, macOS, Linux)
+// - Performance optimization with early termination
+// - Shell script parity for project detection logic
+//
+// The discovery logic is designed to be fast and reliable, providing the same
+// project detection behavior as the original shell script implementation.
+
 package core
 
 import (

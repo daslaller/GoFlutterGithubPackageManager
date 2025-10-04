@@ -1,3 +1,21 @@
+// Package core/pub.go - Dart/Flutter Pub Command Integration and pubspec.yaml Management
+//
+// This file provides integration with Dart and Flutter pub commands, offering the same
+// functionality as the shell script but with improved error handling and cross-platform
+// support. It manages pubspec.yaml files safely and executes pub operations.
+//
+// Key features:
+// - FindPubTool: Auto-detect available dart/flutter commands (shell script parity)
+// - AddGitDependency: Add git dependencies using pub commands (not direct YAML editing)
+// - Sync: Execute pub get/flutter packages get operations
+// - CreateBackup: Safe backup creation before modifying pubspec.yaml
+// - Cross-platform pub command execution with proper error handling
+// - Concurrent operation support with timeout management
+// - Shell script compatible dependency addition workflow
+//
+// The pub integration maintains the exact same behavior as the shell script while
+// providing better error messages and safer operation handling.
+
 package core
 
 import (

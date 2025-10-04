@@ -1,3 +1,19 @@
+// Package core/env.go - Configuration Management and Environment Setup
+//
+// This file provides the core configuration system for the Flutter Package Manager.
+// It handles environment variables, configuration parsing, logging setup, and provides
+// a centralized configuration object used throughout the application.
+//
+// Key responsibilities:
+// - Parse environment variables (FLUTTER_PM_*)
+// - Manage application settings (debug, dry-run, quiet modes)
+// - Provide structured logging with different output formats (text/JSON)
+// - Handle configuration validation and defaults
+// - Support both CLI flags and environment variable configuration
+//
+// The Config struct serves as the single source of truth for all application
+// settings and is passed to all core modules and TUI components.
+
 package core
 
 import (

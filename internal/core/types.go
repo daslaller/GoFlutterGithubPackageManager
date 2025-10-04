@@ -1,3 +1,21 @@
+// Package core/types.go - Core Data Structures and Type Definitions
+//
+// This file defines all the fundamental data structures used throughout the
+// Flutter Package Manager application. These types provide a consistent
+// interface for representing projects, repositories, package specifications,
+// results, and workflow states.
+//
+// Key data structures:
+// - Project: Represents a Flutter/Dart project with pubspec.yaml
+// - RepoCandidate: GitHub repository that can be added as dependency
+// - PkgSpec: Package specification for git dependencies
+// - ActionResult: Standardized result format for all operations
+// - Reco: Smart recommendations for improvements
+// - Step: TUI workflow state enumeration
+//
+// These types ensure type safety and provide a clear contract between
+// different modules (core business logic, TUI, CLI commands).
+
 package core
 
 import "time"

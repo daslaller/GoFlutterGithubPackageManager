@@ -1,3 +1,22 @@
+// Package core/reco.go - Smart Recommendations System
+//
+// This file implements an intelligent recommendation system that analyzes Flutter
+// projects and provides actionable suggestions for improvements. It matches the
+// shell script's recommendation logic while adding enhanced analysis capabilities.
+//
+// Key features:
+// - SuggestPopularPkgs: Recommend commonly used Flutter packages
+// - GenerateFullRecommendations: Comprehensive project analysis and suggestions
+// - pubspec.yaml analysis for missing common dependencies
+// - Git dependency optimization suggestions (SSH URLs, branch pinning)
+// - Security and best practice recommendations
+// - Performance optimization suggestions based on project structure
+// - Shell script compatible recommendation format and categories
+//
+// The recommendation system helps developers discover useful packages and
+// optimize their Flutter projects by analyzing dependencies, project structure,
+// and common patterns to provide contextual suggestions.
+
 package core
 
 import (

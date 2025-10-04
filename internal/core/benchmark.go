@@ -1,3 +1,20 @@
+// Package core/benchmark.go - Performance Benchmarking and Optimization Analysis
+//
+// This file provides performance measurement and optimization tools for the Flutter
+// Package Manager. It helps analyze operation performance and identify bottlenecks
+// to ensure the Go implementation performs as well as or better than the shell script.
+//
+// Key features:
+// - BenchmarkOperation: Measure execution time and memory usage of operations
+// - Memory usage tracking and garbage collection analysis
+// - Performance comparison reporting between shell script and Go implementation
+// - Operation profiling for TUI responsiveness optimization
+// - Cross-platform performance measurement
+// - Benchmark result serialization for performance regression tracking
+//
+// The benchmarking system ensures that the Go rewrite maintains or improves upon
+// the shell script's performance while providing detailed metrics for optimization.
+
 package core
 
 import (

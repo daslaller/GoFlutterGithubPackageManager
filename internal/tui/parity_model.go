@@ -1,3 +1,33 @@
+// Package tui/parity_model.go - Shell Script Parity TUI Implementation (ACTIVE)
+//
+// This file implements the complete shell script parity TUI using proper bubbletea
+// components and harmonica vector smoothing. It provides EXACT functional equivalence
+// with the original shell script while leveraging modern TUI framework capabilities.
+//
+// KEY FEATURES - Shell Script Parity:
+// - Exact menu structure (1-6 options) with shell script numbering
+// - 60-second timeout with auto-default selection behavior
+// - Multi-select interface using space bar (matches shell script)
+// - Same project detection and Git dependency logic
+// - Express Git update functionality with identical workflow
+// - Backup creation and safety mechanisms matching shell script
+//
+// KEY FEATURES - Bubbletea Components:
+// - list.Model: Proper navigation and selection with custom delegate
+// - spinner.Model: Loading animations with configurable styling
+// - progress.Model: Installation progress tracking with gradients
+// - textinput.Model: URL input with placeholder and validation
+// - viewport.Model: Scrollable content display for large outputs
+//
+// KEY FEATURES - Harmonica Vector Smoothing:
+// - Spring physics for smooth scrolling and transitions
+// - Progress bar animations with harmonica easing
+// - Page change transitions using vector smoothing
+// - Menu state transitions with 60fps spring physics
+//
+// This is the ACTIVE TUI implementation used by the Run() function and provides
+// true shell script behavioral parity with modern UI components and animations.
+
 package tui
 
 import (

@@ -1,3 +1,22 @@
+// Package core/git.go - Git Operations and GitHub CLI Integration
+//
+// This file provides all Git-related functionality with exact shell script parity.
+// It integrates with the GitHub CLI (gh) for authentication and repository listing,
+// and uses Git CLI commands for all operations to maintain compatibility.
+//
+// Key features:
+// - GitHub CLI integration for repository listing and authentication
+// - Git clone operations with proper error handling and conflict resolution
+// - Git version checking and command availability validation
+// - Concurrent Git operations with timeout management
+// - SHA-based comparison for precise dependency staleness detection
+// - Cross-platform Git command execution
+// - Shell script compatible Git workflow and command sequences
+//
+// All Git operations use the CLI tools rather than Go libraries to ensure
+// exact compatibility with the shell script behavior and handle edge cases
+// in the same way as the original implementation.
+
 package core
 
 import (

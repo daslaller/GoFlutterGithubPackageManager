@@ -1,3 +1,22 @@
+// Package core/stale.go - Stale Dependency Detection and Express Update Functionality
+//
+// This file implements stale dependency detection with both heuristic and precise
+// methods, exactly matching the shell script's "express git update" feature.
+// It provides fast dependency updates for existing git dependencies.
+//
+// Key features:
+// - CheckStaleHeuristic: Fast 24-hour time-based staleness detection
+// - CheckStalePrecise: SHA-based comparison for exact staleness detection
+// - ExpressGitUpdate: Bulk update of all stale git dependencies
+// - pubspec.lock parsing and analysis for dependency tracking
+// - Concurrent stale checking with performance optimization
+// - Shell script compatible update workflow and behavior
+// - Safe batch operations with backup and rollback capability
+//
+// The express update feature is designed for developers who want to quickly
+// update their git dependencies without going through the full package
+// selection workflow, mirroring the shell script's express functionality.
+
 package core
 
 import (
