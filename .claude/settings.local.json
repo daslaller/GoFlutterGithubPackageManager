@@ -8,7 +8,10 @@
       "Bash(go get:*)",
       "Bash(mv:*)",
       "Bash(mkdir:*)",
-      "Bash(./test-env.exe)"
+      "Bash(./test-env.exe)",
+      "Bash(./flutter-pm-parity.exe --version)",
+      "Bash(go run:*)",
+      "Bash(timeout:*)"
     ],
     "defaultMode": "acceptEdits"
   }

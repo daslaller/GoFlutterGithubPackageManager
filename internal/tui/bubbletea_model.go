@@ -593,9 +593,9 @@ type installProgressMsg struct {
 	message string
 }
 
-// Run starts the TUI application using proper bubbletea components
+// Run starts the TUI application using shell script parity model
 func Run(cfg core.Config, logger *core.Logger) error {
-	m := NewBubbleTeaModel(cfg, logger)
+	m := NewParityModel(cfg, logger)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err := p.Run()
 	return err
