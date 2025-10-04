@@ -18,7 +18,10 @@
 
 package core
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Project represents a Flutter/Dart project
 type Project struct {
@@ -125,4 +128,13 @@ type CommandExecution struct {
 	ExitCode    int               `json:"exit_code,omitempty"`
 	Output      string            `json:"output,omitempty"`
 	Error       string            `json:"error,omitempty"`
+}
+
+// ErrViewNotFound represents an error when a view component is not found
+type ErrViewNotFound struct {
+	Name string
+}
+
+func (e ErrViewNotFound) Error() string {
+	return fmt.Sprintf("view component '%s' not found", e.Name)
 }

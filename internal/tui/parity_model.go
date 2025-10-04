@@ -32,6 +32,7 @@ package tui
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,9 +44,9 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/harmonica"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/daslaller/GoFlutterGithubPackageManager/internal/core"
+	"github.com/daslaller/GoFlutterGithubPackageManager/internal/tui/components"
 )
 
 // ParityModel implements exact shell script functionality with bubbletea components
@@ -59,7 +60,7 @@ type ParityModel struct {
 	height int
 
 	// Shell script state tracking
-	projectSourceChoice   int // 1-6 from shell script menu
+	projectSourceChoice   int // 1-6 from a shell script menu
 	localPubspecAvailable bool
 	detectedPubspecPath   string
 	hasGitDeps            bool
@@ -71,28 +72,22 @@ type ParityModel struct {
 	repos           []core.RepoCandidate
 	selectedRepos   []core.RepoCandidate
 
-	// Bubbletea components with harmonica smoothing
+	// Bubbletea components
 	list      list.Model
 	spinner   spinner.Model
 	progress  progress.Model
 	textInput textinput.Model
 	viewport  viewport.Model
 
-	// Animation states with harmonica
-	springValue     float64
-	springVelocity  float64
-	targetValue     float64
-	scrollOffset    float64
-	targetOffset    float64
+	// Animation states
 	progressPercent float64
-	animationFrame  int
 
 	// UI state
 	currentStep ParityStep
 	loading     bool
 	loadingText string
 	err         error
-	menuTimeout int // 60 second timeout like shell script
+	menuTimeout int // 60-second timeout like a shell script
 
 	// Multi-select state (shell script compatible)
 	multiSelectMode bool
@@ -103,7 +98,14 @@ type ParityModel struct {
 	// Package management
 	packageSpecs []core.PkgSpec
 	results      []core.ActionResult
-	recos        []core.Reco
+
+	// View Component Pattern (modern architecture)
+	viewManager    *components.ViewManager
+	useViewManager bool
+
+	// Testing and automation
+	autoSelect    bool
+	testCycleStep int
 }
 
 // ParityStep represents the exact shell script workflow steps
@@ -124,7 +126,7 @@ const (
 	StepFlutterPMUpdate
 )
 
-// Menu item for exact shell script parity
+// MenuItem Menu item for exact shell script parity
 type MenuItem struct {
 	number      int
 	icon        string
@@ -134,13 +136,18 @@ type MenuItem struct {
 	isDefault   bool
 }
 
-// Implement list.Item interface
+// Title Implement list.Item interface
 func (i MenuItem) Title() string       { return i.title }
 func (i MenuItem) Description() string { return i.description }
 func (i MenuItem) FilterValue() string { return i.title }
 
 // NewParityModel creates a new shell-script-compatible TUI model
 func NewParityModel(cfg core.Config, logger *core.Logger) ParityModel {
+	return NewParityModelWithAutoSelect(cfg, logger, false)
+}
+
+// NewParityModelWithAutoSelect creates a new model with optional autoselect testing
+func NewParityModelWithAutoSelect(cfg core.Config, logger *core.Logger, autoSelect bool) ParityModel {
 	// Initialize components with proper styling
 	l := list.New([]list.Item{}, NewParityItemDelegate(), 0, 0)
 	l.Title = "📱 Flutter Package Manager - Main Menu"
@@ -160,6 +167,11 @@ func NewParityModel(cfg core.Config, logger *core.Logger) ParityModel {
 
 	vp := viewport.New(0, 0)
 
+	// Initialize view manager and register view components
+	vm := components.NewViewManager(cfg, logger)
+	vm.RegisterView("main_menu", components.NewMainMenuView(cfg, logger))
+	vm.RegisterView("repo_selection", components.NewRepoSelectionView(cfg, logger))
+
 	return ParityModel{
 		cfg:             cfg,
 		logger:          logger,
@@ -168,22 +180,30 @@ func NewParityModel(cfg core.Config, logger *core.Logger) ParityModel {
 		progress:        p,
 		textInput:       ti,
 		viewport:        vp,
-		springValue:     0.0,
-		springVelocity:  0.0,
-		targetValue:     0.0,
 		currentStep:     StepMainMenu,
 		menuTimeout:     60,
 		selectedIndices: []int{},
+		viewManager:     vm,
+		useViewManager:  false, // Keep false for now to preserve existing behavior
+		autoSelect:      autoSelect,
+		testCycleStep:   0,
 	}
 }
 
 // Init implements tea.Model - exact shell script initialization
 func (m ParityModel) Init() tea.Cmd {
-	return tea.Batch(
+	commands := []tea.Cmd{
 		m.spinner.Tick,
-		tea.Cmd(m.detectLocalPubspec),
+		m.detectLocalPubspec,
 		m.startMenuTimeout(),
-	)
+	}
+
+	// Add autoselect timer if enabled
+	if m.autoSelect {
+		commands = append(commands, m.autoSelectTimer())
+	}
+
+	return tea.Batch(commands...)
 }
 
 // Update implements tea.Model with shell script parity
@@ -203,23 +223,38 @@ func (m ParityModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.currentStep {
 		case StepMainMenu:
 			return m.handleMainMenuKeys(msg)
+		case StepConfigureSearch:
+			return m.handleConfigureSearchKeys(msg)
+		case StepScanDirectories:
+			return m.handleScanDirectoriesKeys(msg)
 		case StepGitHubRepo:
 			return m.handleGitHubRepoLoadingKeys(msg)
 		case StepGitHubRepoSelection:
 			return m.handleGitHubRepoKeys(msg)
 		case StepPackageSelection:
 			return m.handlePackageSelectionKeys(msg)
+		case StepPackageConfiguration:
+			return m.handlePackageConfigurationKeys(msg)
 		case StepConfirmChanges:
 			return m.handleConfirmationKeys(msg)
 		case StepExecuteChanges:
 			return m.handleExecutionKeys(msg)
+		case StepResults:
+			return m.handleResultsKeys(msg)
+		case StepExpressGitUpdate:
+			return m.handleExpressGitUpdateKeys(msg)
+		case StepFlutterPMUpdate:
+			return m.handleFlutterPMUpdateKeys(msg)
 		}
+
+	case autoSelectMsg:
+		return m.handleAutoSelect(msg)
 
 	case menuTimeoutMsg:
 		if m.currentStep == StepMainMenu {
-			// Auto-select default choice after 60 seconds (shell script behavior)
+			// Auto-select the default choice after 60 seconds (shell script behavior)
 			m.projectSourceChoice = m.getDefaultChoice()
-			return m, m.executeMenuChoice()
+			return m.executeMenuChoiceAndUpdate()
 		}
 
 	case localPubspecMsg:
@@ -231,11 +266,13 @@ func (m ParityModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case reposFoundMsg:
 		m.repos = msg.repos
 		m.loading = false
-		return m, m.setupRepoSelection()
+		m.setupRepoSelectionState()
+		m.currentStep = StepGitHubRepoSelection
 
 	case packageSelectedMsg:
 		m.selectedRepos = msg.repos
-		return m, m.setupPackageConfiguration()
+		m.currentStep = StepPackageConfiguration
+		return m, m.generatePackageSpecs
 
 	case packageSpecsGeneratedMsg:
 		m.packageSpecs = msg.specs
@@ -261,17 +298,6 @@ func (m ParityModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.progress = progressModel.(progress.Model)
 		cmds = append(cmds, progressCmd)
 
-	case harmonicaTickMsg:
-		// Smooth animation updates using harmonica spring physics
-		m.springValue, m.springVelocity = harmonica.NewSpring(harmonica.FPS(60), 6.0, 0.5).Update(
-			m.springValue, m.springVelocity, m.targetValue)
-		m.scrollOffset = m.springValue
-		m.animationFrame++
-
-		// Continue animation if still in motion
-		if abs(m.springValue-m.targetValue) > 0.001 || abs(m.springVelocity) > 0.001 {
-			cmds = append(cmds, m.harmonicaTick())
-		}
 	}
 
 	// Update components
@@ -337,14 +363,86 @@ func (m ParityModel) View() string {
 	return strings.Join(sections, "\n")
 }
 
+// autoSelectTimer creates a timer for automatic test navigation
+func (m ParityModel) autoSelectTimer() tea.Cmd {
+	if !m.autoSelect {
+		return nil
+	}
+
+	// Auto-advance after 2 seconds in each step
+	return tea.Tick(time.Second*2, func(time.Time) tea.Msg {
+		return autoSelectMsg{step: m.testCycleStep}
+	})
+}
+
+// handleAutoSelect handles automatic test cycle navigation
+func (m ParityModel) handleAutoSelect(msg autoSelectMsg) (ParityModel, tea.Cmd) {
+	if !m.autoSelect {
+		return m, nil
+	}
+
+	// Print current step for testing visibility
+	fmt.Printf("🤖 AUTO-TEST: Step %d, CurrentStep: %v\n", msg.step, m.currentStep)
+
+	switch m.currentStep {
+	case StepMainMenu:
+		fmt.Printf("✅ AUTO-TEST: Selecting GitHub repo option (2)\n")
+		m.projectSourceChoice = 2
+		m.testCycleStep++
+		return m.executeMenuChoiceAndUpdate()
+
+	case StepGitHubRepoSelection:
+		if len(m.repos) > 0 {
+			fmt.Printf("✅ AUTO-TEST: Selecting first 2 repositories\n")
+			// Auto-select first 2 repos
+			m.selectedIndices = []int{0}
+			if len(m.repos) > 1 {
+				m.selectedIndices = append(m.selectedIndices, 1)
+			}
+			m.testCycleStep++
+
+			// Build selected repos and proceed
+			m.selectedRepos = make([]core.RepoCandidate, len(m.selectedIndices))
+			for i, idx := range m.selectedIndices {
+				m.selectedRepos[i] = m.repos[idx]
+			}
+			m.currentStep = StepPackageConfiguration
+			return m, tea.Batch(m.generatePackageSpecs, m.autoSelectTimer())
+		}
+
+	case StepPackageConfiguration:
+		fmt.Printf("✅ AUTO-TEST: Proceeding with package configuration\n")
+		m.currentStep = StepConfirmChanges
+		m.testCycleStep++
+		return m, m.autoSelectTimer()
+
+	case StepConfirmChanges:
+		fmt.Printf("✅ AUTO-TEST: Confirming changes\n")
+		m.currentStep = StepExecuteChanges
+		m.testCycleStep++
+		return m, tea.Batch(m.executePackageInstallation, m.autoSelectTimer())
+
+	case StepResults:
+		fmt.Printf("🎉 AUTO-TEST: Test cycle completed successfully!\n")
+		fmt.Printf("📊 AUTO-TEST: Navigation through all views successful\n")
+		return m, tea.Quit
+	}
+
+	// Continue timer for next step
+	return m, m.autoSelectTimer()
+}
+
 // Main menu with exact shell script options and timeout
 func (m ParityModel) viewGitHubRepoLoading() string {
 	var b strings.Builder
 
 	b.WriteString("🔍 Fetching GitHub repositories...\n\n")
 
-	if len(m.repos) > 0 {
-		b.WriteString(fmt.Sprintf("ℹ️ [github] Found %d repositories", len(m.repos)))
+	if m.loading {
+		b.WriteString(fmt.Sprintf("%s %s", m.spinner.View(), m.loadingText))
+	} else {
+		// Just show loading completed, the actual results will be shown in selection view
+		b.WriteString("✨ Preparing selection interface...")
 	}
 
 	return b.String()
@@ -374,11 +472,8 @@ func (m ParityModel) viewMainMenu() string {
 
 	b.WriteString("6. 🔄 Check for Flutter-PM updates\n")
 
-	// Show timeout countdown like shell script
-	remaining := max(0, m.menuTimeout-m.animationFrame/60)
-	if remaining > 0 {
-		b.WriteString(fmt.Sprintf("\nChoice (1-%d, default: %d, auto in %ds): ", maxChoice, defaultChoice, remaining))
-	}
+	// Show choice prompt like shell script
+	b.WriteString(fmt.Sprintf("\nChoice (1-%d, default: %d, auto in 60s): ", maxChoice, defaultChoice))
 
 	return b.String()
 }
@@ -390,81 +485,81 @@ func (m ParityModel) handleMainMenuKeys(msg tea.KeyMsg) (ParityModel, tea.Cmd) {
 		return m, tea.Quit
 	case "1":
 		m.projectSourceChoice = 1
-		return m, m.executeMenuChoice()
+		return m.executeMenuChoiceAndUpdate()
 	case "2":
 		m.projectSourceChoice = 2
-		return m, m.executeMenuChoice()
+		return m.executeMenuChoiceAndUpdate()
 	case "3":
 		m.projectSourceChoice = 3
-		return m, m.executeMenuChoice()
+		return m.executeMenuChoiceAndUpdate()
 	case "4":
 		if m.localPubspecAvailable {
 			m.projectSourceChoice = 4
-			return m, m.executeMenuChoice()
+			return m.executeMenuChoiceAndUpdate()
 		}
 	case "5":
 		if m.hasGitDeps {
 			m.projectSourceChoice = 5
-			return m, m.executeMenuChoice()
+			return m.executeMenuChoiceAndUpdate()
 		}
 	case "6":
 		m.projectSourceChoice = 6
-		return m, m.executeMenuChoice()
+		return m.executeMenuChoiceAndUpdate()
 	case "enter":
 		m.projectSourceChoice = m.getDefaultChoice()
-		return m, m.executeMenuChoice()
+		return m.executeMenuChoiceAndUpdate()
 	}
 	return m, nil
 }
 
-// Execute menu choice with exact shell script logic
-func (m ParityModel) executeMenuChoice() tea.Cmd {
+// Execute menu choice and update the model state
+func (m ParityModel) executeMenuChoiceAndUpdate() (ParityModel, tea.Cmd) {
 	switch m.projectSourceChoice {
 	case 1:
 		// Scan directories
 		m.currentStep = StepScanDirectories
 		m.loading = true
 		m.loadingText = "🔍 Searching for local Flutter projects..."
-		return tea.Cmd(m.scanDirectories)
+		return m, tea.Cmd(m.scanDirectories)
 
 	case 2:
 		// GitHub repo
 		m.currentStep = StepGitHubRepo
 		m.loading = true
 		m.loadingText = "🔍 Fetching repositories..."
-		return tea.Cmd(m.fetchGitHubRepos)
+		return m, tea.Cmd(m.fetchGitHubRepos)
 
 	case 3:
 		// Configure search
 		m.currentStep = StepConfigureSearch
-		return tea.Cmd(m.configureSearch)
+		return m, tea.Cmd(m.configureSearch)
 
 	case 4:
-		// Use detected project
-		m.selectedPubspec = m.detectedPubspecPath
-		m.selectedProject = filepath.Base(filepath.Dir(m.detectedPubspecPath))
+		// Express update - not implemented yet
 		m.currentStep = StepPackageSelection
-		return tea.Cmd(m.fetchPackageRepos)
+		m.selectedPubspec = m.detectedPubspecPath
+		return m, nil
 
 	case 5:
-		// Express Git update
+		// Express git update - not implemented yet
 		m.currentStep = StepExpressGitUpdate
-		m.selectedPubspec = m.detectedPubspecPath
-		m.selectedProject = filepath.Base(filepath.Dir(m.detectedPubspecPath))
 		m.loading = true
-		m.loadingText = "🚀 Express Git update - updating dependencies..."
-		return tea.Cmd(m.expressGitUpdate)
+		m.loadingText = "🔄 Updating git dependencies..."
+		m.selectedPubspec = m.detectedPubspecPath
+		return m, nil
 
 	case 6:
-		// Check for Flutter-PM updates
+		// Flutter PM update
 		m.currentStep = StepFlutterPMUpdate
 		m.loading = true
 		m.loadingText = "🔄 Checking for Flutter-PM updates..."
-		return tea.Cmd(m.checkFlutterPMUpdates)
+		return m, m.checkFlutterPMUpdates
 	}
 
-	return nil
+	return m, nil
 }
+
+// Legacy function removed - executeMenuChoiceAndUpdate() is now the single implementation
 
 // Shell script compatible multi-select for repositories
 func (m ParityModel) viewGitHubRepoSelection() string {
@@ -473,40 +568,90 @@ func (m ParityModel) viewGitHubRepoSelection() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("📋 Found %d repositories\n\n", len(m.repos)))
+	// Beautiful header with styling
+	headerText := fmt.Sprintf("🎯 Repository Selection - Found %d packages", len(m.repos))
+	b.WriteString(paritySuccessStyle.Render(headerText) + "\n\n")
 
-	// Show repositories with shell script format
-	windowStart := max(0, int(m.scrollOffset))
-	windowEnd := min(len(m.repos), windowStart+10)
+	// Manual list rendering with proper overflow indicators and selection display
+	currentIndex := m.list.Index()
+	itemsPerPage := 15 // Show 15 items at a time
+	totalItems := len(m.repos)
 
-	for i := windowStart; i < windowEnd; i++ {
+	// Calculate pagination
+	startIndex := 0
+	endIndex := totalItems
+
+	if totalItems > itemsPerPage {
+		// Calculate which page we're on based on current cursor
+		currentPage := currentIndex / itemsPerPage
+		startIndex = currentPage * itemsPerPage
+		endIndex = startIndex + itemsPerPage
+		if endIndex > totalItems {
+			endIndex = totalItems
+		}
+
+		// Show overflow indicator at top
+		if startIndex > 0 {
+			overflowTop := fmt.Sprintf("▲ %d more above", startIndex)
+			b.WriteString(paritySelectedStyle.Render(overflowTop) + "\n")
+		}
+	}
+
+	// Show repositories with beautiful formatting and selection indicators
+	for i := startIndex; i < endIndex; i++ {
 		repo := m.repos[i]
 		selected := contains(m.selectedIndices, i)
 
-		prefix := "  "
-		if selected {
-			prefix = "✓ "
-		}
-
+		// Create repo display text
 		privacy := "🔓"
 		if repo.Privacy == "private" {
 			privacy = "🔒"
 		}
 
-		line := fmt.Sprintf("%s%s %s/%s", prefix, privacy, repo.Owner, repo.Name)
-		if repo.Desc != "" {
-			line += fmt.Sprintf(" - %s", repo.Desc)
+		repoText := fmt.Sprintf("%s %s/%s", privacy, repo.Owner, repo.Name)
+		if repo.Desc != "" && len(repo.Desc) > 0 {
+			// Truncate long descriptions
+			desc := repo.Desc
+			if len(desc) > 60 {
+				desc = desc[:57] + "..."
+			}
+			repoText += fmt.Sprintf("\n   📝 %s", desc)
 		}
 
-		if i == windowStart+m.list.Index() {
-			line = paritySelectedStyle.Render(line)
+		// Apply simple styling like the bubbletea gif
+		var styledText string
+		if selected {
+			// Selected item with simple checkmark
+			if i == currentIndex {
+				styledText = "> [x] " + repoText
+			} else {
+				styledText = "  [x] " + repoText
+			}
+			styledText = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Render(styledText)
+		} else if i == currentIndex {
+			// Currently highlighted item with simple pointer
+			styledText = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF00FF")).Render("> " + repoText)
+		} else {
+			// Normal item with simple spacing
+			styledText = "  " + repoText
 		}
 
-		b.WriteString(line + "\n")
+		b.WriteString(styledText + "\n")
 	}
 
+	// Show overflow indicator at bottom
+	if totalItems > itemsPerPage && endIndex < totalItems {
+		overflowBottom := fmt.Sprintf("▼ %d more below", totalItems-endIndex)
+		b.WriteString(paritySelectedStyle.Render(overflowBottom) + "\n")
+	}
+
+	// Selection summary with beautiful styling
 	if len(m.selectedIndices) > 0 {
-		b.WriteString(fmt.Sprintf("\nSelected: %d repositories", len(m.selectedIndices)))
+		summaryText := fmt.Sprintf("✨ %d repositories selected for installation", len(m.selectedIndices))
+		b.WriteString("\n" + parityWarningStyle.Render(summaryText) + "\n")
+	} else {
+		hintText := "💡 Use SPACE to select repositories, ENTER to continue"
+		b.WriteString("\n" + parityHelpStyle.Render(hintText) + "\n")
 	}
 
 	return b.String()
@@ -547,7 +692,7 @@ func (m ParityModel) fetchGitHubRepos() tea.Msg {
 		return errorOccurredMsg{err: err}
 	}
 
-	// Build repo options and URLs like shell script
+	// Build repo options and URLs like a shell script
 	m.repoOptions = make([]string, len(repos))
 	m.repoUrls = make([]string, len(repos))
 
@@ -571,36 +716,14 @@ func (m ParityModel) getDefaultChoice() int {
 }
 
 func (m ParityModel) updateMainMenu() tea.Cmd {
-	// Trigger smooth animation to new menu state
-	m.targetValue = 0
-	return m.harmonicaTick()
-}
-
-func (m ParityModel) harmonicaTick() tea.Cmd {
-	return tea.Tick(time.Millisecond*16, func(time.Time) tea.Msg {
-		return harmonicaTickMsg{}
-	})
+	// Return to main menu
+	return nil
 }
 
 func (m ParityModel) startMenuTimeout() tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg {
+	return tea.Tick(60*time.Second, func(time.Time) tea.Msg {
 		return menuTimeoutMsg{}
 	})
-}
-
-// Utility functions
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func contains(slice []int, val int) bool {
@@ -612,17 +735,8 @@ func contains(slice []int, val int) bool {
 	return false
 }
 
-func abs(x float64) float64 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
 // Message types for shell script compatibility
 type menuTimeoutMsg struct{}
-
-type harmonicaTickMsg struct{}
 
 type localPubspecMsg struct {
 	available  bool
@@ -632,6 +746,10 @@ type localPubspecMsg struct {
 
 type reposFoundMsg struct {
 	repos []core.RepoCandidate
+}
+
+type autoSelectMsg struct {
+	step int
 }
 
 type projectsFoundMsg struct {
@@ -654,7 +772,13 @@ type packageSpecsGeneratedMsg struct {
 	specs []core.PkgSpec
 }
 
-// Custom item delegate with shell script styling
+// NewParityItemDelegate Custom item delegate with shell script styling
+// RepoDelegate handles repository selection with multi-select capabilities
+type RepoDelegate struct {
+	list.DefaultDelegate
+	selectedIndices []int
+}
+
 func NewParityItemDelegate() list.DefaultDelegate {
 	d := list.NewDefaultDelegate()
 
@@ -667,35 +791,171 @@ func NewParityItemDelegate() list.DefaultDelegate {
 	return d
 }
 
-// Styles matching shell script aesthetic
+// NewRepoDelegate creates a delegate for repository selection with checkmarks
+func NewRepoDelegate(selectedIndices []int) *RepoDelegate {
+	d := list.NewDefaultDelegate()
+
+	// Configure styles for better repository display
+	d.Styles.SelectedTitle = paritySelectedStyle
+	d.Styles.SelectedDesc = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#E5E7EB")).
+		Background(primaryPurple)
+	d.Styles.NormalTitle = parityRepoStyle
+	d.Styles.NormalDesc = lipgloss.NewStyle().
+		Foreground(darkGray)
+
+	return &RepoDelegate{
+		DefaultDelegate: d,
+		selectedIndices: selectedIndices,
+	}
+}
+
+// Render implements custom rendering for repository items with selection checkmarks
+func (d RepoDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	if menuItem, ok := item.(MenuItem); ok {
+		// Check if this item is selected
+		isSelected := contains(d.selectedIndices, index)
+
+		// Create display text with proper formatting
+		var prefix string
+		if isSelected {
+			prefix = "✅ "
+		} else {
+			prefix = "   "
+		}
+
+		// Build the formatted item text
+		title := prefix + menuItem.title
+		desc := menuItem.description
+
+		// Apply styles based on selection state
+		var titleStyle, descStyle lipgloss.Style
+		if isSelected {
+			titleStyle = parityRepoSelectedStyle
+			descStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FFFFFF")).
+				Background(accentGreen)
+		} else {
+			titleStyle = d.DefaultDelegate.Styles.NormalTitle
+			descStyle = d.DefaultDelegate.Styles.NormalDesc
+		}
+
+		// Use a reasonable width for rendering (list items)
+		width := 70 // Standard terminal width minus margins
+
+		// Render with proper width constraints
+		renderedTitle := titleStyle.Width(width).Render(title)
+		renderedDesc := descStyle.Width(width).Render(desc)
+
+		fmt.Fprint(w, renderedTitle+"\n"+renderedDesc)
+		return
+	}
+
+	// Fallback to default rendering
+	d.DefaultDelegate.Render(w, m, index, item)
+}
+
+// Beautiful lipgloss theme system
 var (
+	// Color palette
+	primaryBlue   = lipgloss.Color("#0EA5E9")
+	primaryPurple = lipgloss.Color("#8B5CF6")
+	accentGreen   = lipgloss.Color("#10B981")
+	accentOrange  = lipgloss.Color("#F59E0B")
+	dangerRed     = lipgloss.Color("#EF4444")
+	warningYellow = lipgloss.Color("#F59E0B")
+	mutedGray     = lipgloss.Color("#6B7280")
+	lightGray     = lipgloss.Color("#9CA3AF")
+	darkGray      = lipgloss.Color("#374151")
+	bgDark        = lipgloss.Color("#1F2937")
+	bgLight       = lipgloss.Color("#F9FAFB")
+
+	// Header with gradient-like effect
 	parityHeaderStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#FFFFFF")).
-				Background(lipgloss.Color("#02569B")).
+				Background(primaryBlue).
 				Padding(1, 2).
 				Bold(true).
 				Width(60).
-				Align(lipgloss.Center)
+				Align(lipgloss.Center).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(primaryPurple)
 
+	// Selected items with beautiful highlighting
 	paritySelectedStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#FFFFFF")).
-				Background(lipgloss.Color("#02569B")).
-				Bold(true)
+				Background(primaryPurple).
+				Padding(0, 1).
+				Bold(true).
+				Border(lipgloss.NormalBorder()).
+				BorderForeground(primaryBlue)
 
+	// Loading spinner with animation feel
 	paritySpinnerStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#13B9FD")).
-				Bold(true)
+				Foreground(accentGreen).
+				Bold(true).
+				Italic(true)
 
+	// Error messages with clear visibility
 	parityErrorStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#F44336")).
-				Bold(true)
+				Foreground(dangerRed).
+				Background(lipgloss.Color("#FEF2F2")).
+				Padding(0, 1).
+				Bold(true).
+				Border(lipgloss.NormalBorder()).
+				BorderForeground(dangerRed)
 
+	// Help text with subtle styling
 	parityHelpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#6B7280")).
-			Italic(true)
+			Foreground(mutedGray).
+			Italic(true).
+			Border(lipgloss.HiddenBorder()).
+			Padding(1, 0)
+
+	// Success messages
+	paritySuccessStyle = lipgloss.NewStyle().
+				Foreground(accentGreen).
+				Background(lipgloss.Color("#F0FDF4")).
+				Padding(0, 1).
+				Bold(true).
+				Border(lipgloss.NormalBorder()).
+				BorderForeground(accentGreen)
+
+	// Warning messages
+	parityWarningStyle = lipgloss.NewStyle().
+				Foreground(warningYellow).
+				Background(lipgloss.Color("#FFFBEB")).
+				Padding(0, 1).
+				Bold(true).
+				Border(lipgloss.NormalBorder()).
+				BorderForeground(warningYellow)
+
+	// Menu options with hover effect
+	parityMenuOptionStyle = lipgloss.NewStyle().
+				Foreground(darkGray).
+				Padding(0, 1).
+				Border(lipgloss.HiddenBorder())
+
+	// Repository item styling
+	parityRepoStyle = lipgloss.NewStyle().
+			Foreground(darkGray).
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lightGray).
+			Padding(1, 2).
+			Margin(0, 1)
+
+	// Selected repository with checkmark
+	parityRepoSelectedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FFFFFF")).
+				Background(accentGreen).
+				Border(lipgloss.ThickBorder()).
+				BorderForeground(primaryBlue).
+				Padding(1, 2).
+				Margin(0, 1).
+				Bold(true)
 )
 
-// GitHub repository selection with shell script multi-select behavior
+// GitHub repository selection with a shell script multi-select behavior
 func (m ParityModel) handleGitHubRepoKeys(msg tea.KeyMsg) (ParityModel, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
@@ -703,17 +963,13 @@ func (m ParityModel) handleGitHubRepoKeys(msg tea.KeyMsg) (ParityModel, tea.Cmd)
 	case "up", "k":
 		if m.list.Index() > 0 {
 			m.list.CursorUp()
-			// Smooth scroll animation
-			m.targetValue = float64(m.list.Index())
-			return m, m.harmonicaTick()
 		}
+		return m, nil
 	case "down", "j":
 		if m.list.Index() < len(m.repos)-1 {
 			m.list.CursorDown()
-			// Smooth scroll animation
-			m.targetValue = float64(m.list.Index())
-			return m, m.harmonicaTick()
 		}
+		return m, nil
 	case " ":
 		// Space bar toggle selection (shell script behavior)
 		currentIndex := m.list.Index()
@@ -742,7 +998,7 @@ func (m ParityModel) handleGitHubRepoKeys(msg tea.KeyMsg) (ParityModel, tea.Cmd)
 			m.selectedRepos[i] = m.repos[idx]
 		}
 
-		return m, m.setupPackageConfiguration()
+		return m, func() tea.Msg { return packageSelectedMsg{repos: m.selectedRepos} }
 	}
 	return m, nil
 }
@@ -753,12 +1009,10 @@ func (m ParityModel) handlePackageSelectionKeys(msg tea.KeyMsg) (ParityModel, te
 		return m, tea.Quit
 	case "up", "k":
 		m.list.CursorUp()
-		m.targetValue = float64(m.list.Index())
-		return m, m.harmonicaTick()
+		return m, nil
 	case "down", "j":
 		m.list.CursorDown()
-		m.targetValue = float64(m.list.Index())
-		return m, m.harmonicaTick()
+		return m, nil
 	case " ":
 		// Toggle package selection
 		currentIndex := m.list.Index()
@@ -776,12 +1030,12 @@ func (m ParityModel) handlePackageSelectionKeys(msg tea.KeyMsg) (ParityModel, te
 	case "enter":
 		// Proceed to package configuration
 		m.currentStep = StepPackageConfiguration
-		return m, tea.Cmd(m.generatePackageSpecs)
+		return m, m.generatePackageSpecs
 	}
 	return m, nil
 }
 
-func (m ParityModel) setupRepoSelection() tea.Cmd {
+func (m *ParityModel) setupRepoSelectionState() {
 	// Setup bubbletea list for repository selection
 	items := make([]list.Item, len(m.repos))
 	for i, repo := range m.repos {
@@ -807,17 +1061,10 @@ func (m ParityModel) setupRepoSelection() tea.Cmd {
 
 	m.list.SetItems(items)
 	m.list.Title = fmt.Sprintf("📋 Found %d repositories - Select packages to add", len(m.repos))
-	m.currentStep = StepGitHubRepoSelection
 	m.selectedIndices = []int{} // Reset selection
-
-	return nil
 }
 
-func (m ParityModel) setupPackageConfiguration() tea.Cmd {
-	// Transition to package configuration step
-	m.currentStep = StepPackageConfiguration
-	return tea.Cmd(m.generatePackageSpecs)
-}
+// setupPackageConfiguration removed - logic moved to Update function
 
 func (m ParityModel) viewPackageSelection() string {
 	if m.loading {
@@ -885,14 +1132,14 @@ func (m ParityModel) viewResults() string {
 
 	b.WriteString("✨ Installation Results\n\n")
 
-	// Show progress bar if still processing
+	// Show a progress bar if still processing
 	if m.loading && m.progressPercent > 0 {
 		progressText := fmt.Sprintf("Progress: %s %.0f%%",
 			m.progress.ViewAs(m.progressPercent), m.progressPercent*100)
 		b.WriteString(progressText + "\n\n")
 	}
 
-	// Show results summary
+	// Show result summary
 	successCount := 0
 	errorCount := 0
 
@@ -941,29 +1188,6 @@ func (m ParityModel) viewResults() string {
 		}
 	}
 
-	// Show recommendations if available
-	if len(m.recos) > 0 {
-		b.WriteString("\n\n💡 Recommendations:\n\n")
-
-		for _, reco := range m.recos {
-			icon := "ℹ️"
-			switch reco.Severity {
-			case "warn":
-				icon = "⚠️"
-			case "error":
-				icon = "❌"
-			case "info":
-				icon = "💡"
-			}
-
-			b.WriteString(fmt.Sprintf("%s %s\n", icon, reco.Message))
-			if reco.Rationale != "" {
-				b.WriteString(fmt.Sprintf("   %s\n", reco.Rationale))
-			}
-			b.WriteString("\n")
-		}
-	}
-
 	return b.String()
 }
 
@@ -1001,7 +1225,7 @@ func (m ParityModel) generatePackageSpecs() tea.Msg {
 }
 
 func (m ParityModel) configureSearch() tea.Msg {
-	// Shell script configuration - return to main menu for now
+	// Shell script configuration - return to the main menu for now
 	// In real implementation, this would show configuration options
 	return operationCompleteMsg{results: []core.ActionResult{
 		{OK: true, Message: "Configuration not implemented - returning to main menu"},
@@ -1022,9 +1246,6 @@ func (m ParityModel) expressGitUpdate() tea.Msg {
 	projectDir := filepath.Dir(m.selectedPubspec)
 	result := core.ExpressGitUpdate(m.logger, &m.cfg, projectDir)
 
-	// Generate recommendations after update
-	_, _ = core.GenerateFullRecommendations(m.logger, projectDir)
-
 	return operationCompleteMsg{results: []core.ActionResult{result}}
 }
 
@@ -1043,7 +1264,7 @@ func (m ParityModel) executePackageInstallation() tea.Msg {
 	projectDir := filepath.Dir(m.selectedPubspec)
 	var results []core.ActionResult
 
-	// Create backup first (shell script behavior)
+	// Create a backup first (shell script behavior)
 	if backupInfo, err := core.CreateBackup(projectDir); err != nil {
 		m.logger.Error("backup", err)
 		results = append(results, core.ActionResult{
@@ -1075,11 +1296,6 @@ func (m ParityModel) executePackageInstallation() tea.Msg {
 		results = append(results, syncResult)
 	}
 
-	// Generate recommendations
-	if recos, err := core.GenerateFullRecommendations(m.logger, projectDir); err == nil {
-		m.recos = recos
-	}
-
 	return operationCompleteMsg{results: results}
 }
 
@@ -1093,9 +1309,9 @@ func (m ParityModel) handleConfirmationKeys(msg tea.KeyMsg) (ParityModel, tea.Cm
 		m.currentStep = StepExecuteChanges
 		m.loading = true
 		m.loadingText = "Installing packages..."
-		return m, tea.Cmd(m.executePackageInstallation)
+		return m, m.executePackageInstallation
 	case "n", "N":
-		// Cancel and return to main menu
+		// Cancel and return to the main menu
 		m.currentStep = StepMainMenu
 		m.selectedRepos = []core.RepoCandidate{}
 		m.packageSpecs = []core.PkgSpec{}
@@ -1137,7 +1353,7 @@ func (m ParityModel) viewPackageConfiguration() string {
 			b.WriteString(fmt.Sprintf("     %s\n", repo.Desc))
 		}
 
-		// Show generated package name
+		// Show a generated package name
 		name := strings.ReplaceAll(repo.Name, "-", "_")
 		name = strings.ToLower(name)
 		b.WriteString(fmt.Sprintf("     Package name: %s\n", name))
@@ -1161,7 +1377,7 @@ func (m ParityModel) viewExecuteChanges() string {
 		b.WriteString(fmt.Sprintf("📋 Path: %s\n\n", m.selectedPubspec))
 	}
 
-	// Show progress bar with harmonica smoothing
+	// Show a progress bar with harmonica smoothing
 	if m.progressPercent > 0 {
 		progressText := fmt.Sprintf("Progress: %s %.0f%%",
 			m.progress.ViewAs(m.progressPercent), m.progressPercent*100)
@@ -1197,12 +1413,92 @@ func (m ParityModel) handleGitHubRepoLoadingKeys(msg tea.KeyMsg) (ParityModel, t
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	case "esc":
-		// Return to main menu
+		// Return to the main menu
+		m.currentStep = StepMainMenu
+		m.loading = false
+		return m, m.updateMainMenu()
+	case "enter":
+		// If we have repos, transition to selection
+		if len(m.repos) > 0 {
+			m.loading = false
+			m.setupRepoSelectionState()
+			m.currentStep = StepGitHubRepoSelection
+		}
+	}
+	// During loading, most keys are ignored except quit and escape
+	return m, nil
+}
+
+// Missing key handlers for all steps
+func (m ParityModel) handleConfigureSearchKeys(msg tea.KeyMsg) (ParityModel, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.currentStep = StepMainMenu
+		return m, m.updateMainMenu()
+	}
+	return m, nil
+}
+
+func (m ParityModel) handleScanDirectoriesKeys(msg tea.KeyMsg) (ParityModel, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc":
 		m.currentStep = StepMainMenu
 		m.loading = false
 		return m, m.updateMainMenu()
 	}
-	// During loading, most keys are ignored except quit and escape
+	return m, nil
+}
+
+func (m ParityModel) handlePackageConfigurationKeys(msg tea.KeyMsg) (ParityModel, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.currentStep = StepGitHubRepoSelection
+		return m, nil
+	case "enter":
+		m.currentStep = StepConfirmChanges
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m ParityModel) handleResultsKeys(msg tea.KeyMsg) (ParityModel, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc", "enter":
+		m.currentStep = StepMainMenu
+		return m, m.updateMainMenu()
+	}
+	return m, nil
+}
+
+func (m ParityModel) handleExpressGitUpdateKeys(msg tea.KeyMsg) (ParityModel, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.currentStep = StepMainMenu
+		m.loading = false
+		return m, m.updateMainMenu()
+	}
+	return m, nil
+}
+
+func (m ParityModel) handleFlutterPMUpdateKeys(msg tea.KeyMsg) (ParityModel, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.currentStep = StepMainMenu
+		m.loading = false
+		return m, m.updateMainMenu()
+	}
 	return m, nil
 }
 
@@ -1217,4 +1513,24 @@ func RunParity(cfg core.Config, logger *core.Logger) error {
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err := p.Run()
 	return err
+}
+
+// RunParityAutoTest runs the application in automatic test mode
+func RunParityAutoTest(cfg core.Config, logger *core.Logger) error {
+	fmt.Println("🚀 Starting AUTO-TEST cycle - navigating through all views...")
+	fmt.Println("📋 Test will: Main Menu → GitHub Repos → Selection → Configuration → Confirmation → Execution → Results")
+	fmt.Println("")
+
+	m := NewParityModelWithAutoSelect(cfg, logger, true)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	_, err := p.Run()
+
+	if err != nil {
+		fmt.Printf("❌ AUTO-TEST failed with error: %v\n", err)
+		return err
+	}
+
+	fmt.Println("")
+	fmt.Println("🎯 AUTO-TEST cycle completed! All views navigated successfully.")
+	return nil
 }

@@ -49,6 +49,8 @@ func handleCLICommand(cfg core.Config, logger *core.Logger) error {
 		return cmdStatus(cfg, logger, rootDir)
 	case "reco":
 		return cmdReco(cfg, logger, rootDir)
+	case "autotest":
+		return cmdAutoTest(cfg, logger)
 	default:
 		return fmt.Errorf("unknown command: %s", cfg.CLICommand)
 	}
@@ -160,4 +162,9 @@ func cmdReco(cfg core.Config, logger *core.Logger, rootDir string) error {
 	}
 
 	return nil
+}
+
+// cmdAutoTest handles the autotest command
+func cmdAutoTest(cfg core.Config, logger *core.Logger) error {
+	return tui.RunParityAutoTest(cfg, logger)
 }

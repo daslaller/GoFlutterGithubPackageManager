@@ -15,7 +15,10 @@
       "Bash(rm:*)",
       "Bash(./flutter-pm-final.exe --version)",
       "Bash(true)",
-      "Bash(./flutter-pm-verified.exe --version)"
+      "Bash(./flutter-pm-verified.exe --version)",
+      "Bash(grep:*)",
+      "Bash(./flutter-pm.exe autotest)",
+      "Bash(pkill:*)"
     ],
     "defaultMode": "acceptEdits"
   }
