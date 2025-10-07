@@ -1,0 +1,16 @@
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║                  🎯 Flutter Package Manager                  ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+
+📱 Flutter Package Manager - Main Menu:
+► 1. 🔧 Check prerequisites
+  2. 🐙 GitHub repo
+  3. ⚙️ Configure search
+  4. 📁 Update local package
+  5. 🔄 Check for Flutter-PM updates
+
+Program quits in 60 seconds
+
+↑/↓ navigate • enter/1-5 select • q quit

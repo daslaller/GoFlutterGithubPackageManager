@@ -117,6 +117,9 @@ func (m *ExecutionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.err = msg.err
 			m.executing = false
+		} else {
+			// Continue to next step
+			cmds = append(cmds, m.executeNextStep())
 		}
 		// Update progress
 		if m.totalSteps > 0 {
@@ -207,33 +210,19 @@ func (m *ExecutionModel) View() string {
 
 // executeInstallation runs the package installation process
 func (m *ExecutionModel) executeInstallation() tea.Cmd {
-	return func() tea.Msg {
-		// Simulate installation process
-		steps := []string{
-			"Creating pubspec.yaml backup",
-			"Validating package specifications",
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+		return executionStepMsg{
+			step:     1,
+			stepName: "Creating pubspec.yaml backup",
+			err:      nil,
 		}
+	})
+}
 
-		// Add package installation steps
-		for _, spec := range m.shared.PackageSpecs {
-			steps = append(steps, fmt.Sprintf("Installing %s", spec.Name))
-		}
-
-		steps = append(steps, "Running pub get")
-
-		// Execute steps with delay to show progress
-		for i, step := range steps {
-			time.Sleep(500 * time.Millisecond) // Simulate work
-
-			// Send progress update
-			tea.NewProgram(nil).Send(executionStepMsg{
-				step:     i + 1,
-				stepName: step,
-				err:      nil,
-			})
-		}
-
-		// Create mock results
+// executeNextStep continues the installation process
+func (m *ExecutionModel) executeNextStep() tea.Cmd {
+	if m.currentStep >= m.totalSteps {
+		// Installation complete
 		results := make([]core.ActionResult, len(m.shared.PackageSpecs))
 		for i, spec := range m.shared.PackageSpecs {
 			results[i] = core.ActionResult{
@@ -247,9 +236,35 @@ func (m *ExecutionModel) executeInstallation() tea.Cmd {
 			}
 		}
 
-		return executionCompleteMsg{
-			results: results,
-			err:     nil,
+		return func() tea.Msg {
+			return executionCompleteMsg{
+				results: results,
+				err:     nil,
+			}
 		}
 	}
+
+	// Get the next step name
+	var stepName string
+	if m.currentStep == 1 {
+		stepName = "Validating package specifications"
+	} else if m.currentStep <= len(m.shared.PackageSpecs)+1 {
+		packageIndex := m.currentStep - 2
+		if packageIndex >= 0 && packageIndex < len(m.shared.PackageSpecs) {
+			stepName = fmt.Sprintf("Installing %s", m.shared.PackageSpecs[packageIndex].Name)
+		} else {
+			stepName = "Installing package"
+		}
+	} else {
+		stepName = "Running pub get"
+	}
+
+	// Simulate work with a delay
+	return tea.Tick(800*time.Millisecond, func(time.Time) tea.Msg {
+		return executionStepMsg{
+			step:     m.currentStep + 1,
+			stepName: stepName,
+			err:      nil,
+		}
+	})
 }

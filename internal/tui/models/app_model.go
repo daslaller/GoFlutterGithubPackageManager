@@ -15,14 +15,21 @@ import (
 type AppScreen int
 
 const (
-	ScreenMainMenu AppScreen = iota
+	ScreenMainMenu      AppScreen = iota
+	ScreenPrerequisites           // NEW: Check prerequisites and provide guidance
 	ScreenScanDirectories
 	ScreenGitHubRepo
-	ScreenRepoSelection
+	ScreenSourceSelection     // NEW: Select which Flutter project to work on
+	ScreenSourceConfig        // NEW: Configure download location and name
+	ScreenSourceDownload      // NEW: Download/clone the source project
+	ScreenDependencySelection // RENAMED: Multi-select dependencies to add (was ScreenRepoSelection)
 	ScreenConfiguration
 	ScreenConfirmation
 	ScreenExecution
 	ScreenResults
+	ScreenSearchConfig // NEW: Configure repository search filters
+	ScreenForceUpdate  // NEW: Force update stale packages
+	ScreenSelfUpdate   // NEW: Update Flutter-PM itself
 	ScreenError
 )
 
@@ -38,15 +45,22 @@ type AppModel struct {
 	height        int
 
 	// Screen models
-	mainMenu        tea.Model
-	scanDirectories tea.Model
-	gitHubRepo      tea.Model
-	repoSelection   tea.Model
-	configuration   tea.Model
-	confirmation    tea.Model
-	execution       tea.Model
-	results         tea.Model
-	errorScreen     tea.Model
+	mainMenu            tea.Model
+	prerequisites       tea.Model // NEW: Prerequisites checking
+	scanDirectories     tea.Model
+	gitHubRepo          tea.Model
+	sourceSelection     tea.Model // NEW: Select source Flutter project
+	sourceConfig        tea.Model // NEW: Configure download location/name
+	sourceDownload      tea.Model // NEW: Download source project
+	dependencySelection tea.Model // RENAMED: Multi-select dependencies (was repoSelection)
+	configuration       tea.Model
+	confirmation        tea.Model
+	execution           tea.Model
+	results             tea.Model
+	searchConfig        tea.Model // NEW: Configure search filters
+	forceUpdate         tea.Model // NEW: Force update packages
+	selfUpdate          tea.Model // NEW: Self-update Flutter-PM
+	errorScreen         tea.Model
 
 	// Shared application state
 	SharedState *AppState
@@ -57,18 +71,22 @@ type AppModel struct {
 
 // AppState holds data that needs to be shared between screens
 type AppState struct {
-	// Project information
-	SelectedProject       *core.Project
-	DetectedPubspecPath   string
-	DetectedProject       string
-	LocalPubspecAvailable bool
-	HasGitDeps            bool
+	// Source project information (the Flutter project being worked ON)
+	SourceProject         *core.Project // The Flutter project we're modifying
+	SourceProjectPath     string        // Path to the source project
+	DetectedPubspecPath   string        // Detected local pubspec path
+	DetectedProject       string        // Detected local project name
+	LocalPubspecAvailable bool          // Whether local pubspec was found
+	HasGitDeps            bool          // Whether project has git dependencies
 
-	// Repository data
-	AvailableRepos []core.RepoCandidate
-	SelectedRepos  []core.RepoCandidate
+	// Available source projects (for selection)
+	AvailableSourceRepos []core.RepoCandidate // Available Flutter projects to work on
 
-	// Package specifications
+	// Dependencies (packages to ADD to the source project)
+	AvailableDependencies []core.RepoCandidate // Available packages to add as dependencies
+	SelectedDependencies  []core.RepoCandidate // Selected packages to add to pubspec
+
+	// Package specifications (for dependency installation)
 	PackageSpecs []core.PkgSpec
 
 	// Operation results
@@ -143,6 +161,10 @@ func (m *AppModel) View() string {
 		if m.mainMenu != nil {
 			return m.mainMenu.View()
 		}
+	case ScreenPrerequisites:
+		if m.prerequisites != nil {
+			return m.prerequisites.View()
+		}
 	case ScreenScanDirectories:
 		if m.scanDirectories != nil {
 			return m.scanDirectories.View()
@@ -151,9 +173,25 @@ func (m *AppModel) View() string {
 		if m.gitHubRepo != nil {
 			return m.gitHubRepo.View()
 		}
-	case ScreenRepoSelection:
-		if m.repoSelection != nil {
-			return m.repoSelection.View()
+	case ScreenSourceSelection:
+		if m.sourceSelection != nil {
+			return m.sourceSelection.View()
+		}
+	case ScreenSourceConfig:
+		if m.sourceConfig != nil {
+			return m.sourceConfig.View()
+		}
+	case ScreenSourceDownload:
+		if m.sourceDownload != nil {
+			return m.sourceDownload.View()
+		}
+	case ScreenDependencySelection:
+		if m.dependencySelection != nil {
+			return m.dependencySelection.View()
+		}
+	case ScreenSearchConfig:
+		if m.searchConfig != nil {
+			return m.searchConfig.View()
 		}
 	case ScreenConfiguration:
 		if m.configuration != nil {
@@ -170,6 +208,14 @@ func (m *AppModel) View() string {
 	case ScreenResults:
 		if m.results != nil {
 			return m.results.View()
+		}
+	case ScreenForceUpdate:
+		if m.forceUpdate != nil {
+			return m.forceUpdate.View()
+		}
+	case ScreenSelfUpdate:
+		if m.selfUpdate != nil {
+			return m.selfUpdate.View()
 		}
 	case ScreenError:
 		if m.errorScreen != nil {
@@ -189,6 +235,10 @@ func (m *AppModel) updateCurrentScreen(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mainMenu != nil {
 			m.mainMenu, cmd = m.mainMenu.Update(msg)
 		}
+	case ScreenPrerequisites:
+		if m.prerequisites != nil {
+			m.prerequisites, cmd = m.prerequisites.Update(msg)
+		}
 	case ScreenScanDirectories:
 		if m.scanDirectories != nil {
 			m.scanDirectories, cmd = m.scanDirectories.Update(msg)
@@ -197,9 +247,25 @@ func (m *AppModel) updateCurrentScreen(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.gitHubRepo != nil {
 			m.gitHubRepo, cmd = m.gitHubRepo.Update(msg)
 		}
-	case ScreenRepoSelection:
-		if m.repoSelection != nil {
-			m.repoSelection, cmd = m.repoSelection.Update(msg)
+	case ScreenSourceSelection:
+		if m.sourceSelection != nil {
+			m.sourceSelection, cmd = m.sourceSelection.Update(msg)
+		}
+	case ScreenSourceConfig:
+		if m.sourceConfig != nil {
+			m.sourceConfig, cmd = m.sourceConfig.Update(msg)
+		}
+	case ScreenSourceDownload:
+		if m.sourceDownload != nil {
+			m.sourceDownload, cmd = m.sourceDownload.Update(msg)
+		}
+	case ScreenDependencySelection:
+		if m.dependencySelection != nil {
+			m.dependencySelection, cmd = m.dependencySelection.Update(msg)
+		}
+	case ScreenSearchConfig:
+		if m.searchConfig != nil {
+			m.searchConfig, cmd = m.searchConfig.Update(msg)
 		}
 	case ScreenConfiguration:
 		if m.configuration != nil {
@@ -216,6 +282,14 @@ func (m *AppModel) updateCurrentScreen(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ScreenResults:
 		if m.results != nil {
 			m.results, cmd = m.results.Update(msg)
+		}
+	case ScreenForceUpdate:
+		if m.forceUpdate != nil {
+			m.forceUpdate, cmd = m.forceUpdate.Update(msg)
+		}
+	case ScreenSelfUpdate:
+		if m.selfUpdate != nil {
+			m.selfUpdate, cmd = m.selfUpdate.Update(msg)
 		}
 	case ScreenError:
 		if m.errorScreen != nil {
@@ -237,6 +311,13 @@ func (m *AppModel) transitionToScreen(screen AppScreen, data interface{}) (tea.M
 		}
 		return m, m.mainMenu.Init()
 
+	case ScreenPrerequisites:
+		if m.prerequisites == nil {
+			// Route to scan directories model for now (building on existing foundation)
+			m.prerequisites = NewScanDirectoriesModel(m.cfg, m.logger, m.SharedState)
+		}
+		return m, m.prerequisites.Init()
+
 	case ScreenScanDirectories:
 		if m.scanDirectories == nil {
 			m.scanDirectories = NewScanDirectoriesModel(m.cfg, m.logger, m.SharedState)
@@ -249,11 +330,35 @@ func (m *AppModel) transitionToScreen(screen AppScreen, data interface{}) (tea.M
 		}
 		return m, m.gitHubRepo.Init()
 
-	case ScreenRepoSelection:
-		if m.repoSelection == nil {
-			m.repoSelection = NewRepoSelectionModel(m.cfg, m.logger, m.SharedState)
+	case ScreenSourceSelection:
+		if m.sourceSelection == nil {
+			// Route to GitHub repo model for now (building on existing foundation)
+			m.sourceSelection = NewGitHubRepoModel(m.cfg, m.logger, m.SharedState)
 		}
-		return m, m.repoSelection.Init()
+		return m, m.sourceSelection.Init()
+	case ScreenSourceConfig:
+		if m.sourceConfig == nil {
+			// Route to configuration model for now (building on existing foundation)
+			m.sourceConfig = NewConfigurationModel(m.cfg, m.logger, m.SharedState)
+		}
+		return m, m.sourceConfig.Init()
+	case ScreenSourceDownload:
+		if m.sourceDownload == nil {
+			// Route to scan directories model for now (building on existing foundation)
+			m.sourceDownload = NewScanDirectoriesModel(m.cfg, m.logger, m.SharedState)
+		}
+		return m, m.sourceDownload.Init()
+	case ScreenDependencySelection:
+		if m.dependencySelection == nil {
+			m.dependencySelection = NewRepoSelectionModel(m.cfg, m.logger, m.SharedState)
+		}
+		return m, m.dependencySelection.Init()
+
+	case ScreenSearchConfig:
+		if m.searchConfig == nil {
+			m.searchConfig = NewSearchConfigModel(m.cfg, m.logger, m.SharedState)
+		}
+		return m, m.searchConfig.Init()
 
 	case ScreenConfiguration:
 		if m.configuration == nil {
@@ -278,6 +383,20 @@ func (m *AppModel) transitionToScreen(screen AppScreen, data interface{}) (tea.M
 			m.results = NewResultsModel(m.cfg, m.logger, m.SharedState)
 		}
 		return m, m.results.Init()
+
+	case ScreenForceUpdate:
+		if m.forceUpdate == nil {
+			// Route to execution model for now (building on existing foundation)
+			m.forceUpdate = NewExecutionModel(m.cfg, m.logger, m.SharedState)
+		}
+		return m, m.forceUpdate.Init()
+
+	case ScreenSelfUpdate:
+		if m.selfUpdate == nil {
+			// Route to execution model for now (building on existing foundation)
+			m.selfUpdate = NewExecutionModel(m.cfg, m.logger, m.SharedState)
+		}
+		return m, m.selfUpdate.Init()
 
 	case ScreenError:
 		if m.errorScreen == nil {

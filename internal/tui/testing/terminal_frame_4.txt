@@ -1,0 +1,4 @@
+🔍 Scanning for Flutter Projects...
+
+Please wait while we scan common directories for Flutter projects.
+

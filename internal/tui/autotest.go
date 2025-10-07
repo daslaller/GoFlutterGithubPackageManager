@@ -132,11 +132,11 @@ func (m *AutoTestModel) executeTestStep(step int) (tea.Model, tea.Cmd) {
 
 	case 3: // Test repo selection
 		// Simulates having repositories and selecting some
-		m.app.SharedState.AvailableRepos = []core.RepoCandidate{
+		m.app.SharedState.AvailableDependencies = []core.RepoCandidate{
 			{Owner: "test", Name: "package1", URL: "https://github.com/test/package1.git", Privacy: "public"},
 			{Owner: "test", Name: "package2", URL: "https://github.com/test/package2.git", Privacy: "public"},
 		}
-		m.app.SharedState.SelectedRepos = []core.RepoCandidate{
+		m.app.SharedState.SelectedDependencies = []core.RepoCandidate{
 			{Owner: "test", Name: "package1", URL: "https://github.com/test/package1.git", Privacy: "public"},
 		}
 		m.logTestResult("✅ Repository selection working")

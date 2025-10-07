@@ -70,6 +70,7 @@ func NewResultsModel(cfg core.Config, logger *core.Logger, shared *AppState) *Re
 
 // Init initializes the results screen
 func (m *ResultsModel) Init() tea.Cmd {
+	m.ready = true
 	m.updateContent()
 	return nil
 }

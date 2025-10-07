@@ -85,7 +85,7 @@ func (m *ScanDirectoriesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.projects = msg.projects
-		m.shared.SelectedProject = nil // Will be set if user selects one
+		m.shared.SourceProject = nil // Will be set if user selects one
 		m.complete = true
 
 		m.logger.Info("scan_directories", fmt.Sprintf("Found %d Flutter projects", len(msg.projects)))

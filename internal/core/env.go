@@ -103,7 +103,7 @@ func ParseEnv() Config {
 			if i+1 < len(args) {
 				cfg.Jobs = parseInt(args[i+1], 4)
 			}
-		case "add", "sync", "status", "reco":
+		case "add", "sync", "status", "reco", "autotest":
 			cfg.CLICommand = arg
 		}
 	}

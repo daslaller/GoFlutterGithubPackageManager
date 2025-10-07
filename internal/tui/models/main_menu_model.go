@@ -47,10 +47,11 @@ type MenuOption struct {
 }
 
 var menuOptions = []MenuOption{
-	{"Scan directories", "Scan for Flutter projects in common directories", ScreenScanDirectories},
-	{"GitHub repo", "Browse and select packages from GitHub repositories", ScreenGitHubRepo},
-	{"Configure search", "Set up search filters and preferences", ScreenConfiguration},
-	{"🔄 Check for Flutter-PM updates", "Update Flutter Package Manager to latest version", ScreenResults}, // Show update results
+	{"🔧 Check prerequisites", "Verify required tools (git, dart/flutter, gh) are installed", ScreenPrerequisites},
+	{"🐙 GitHub repo", "Browse and select packages from GitHub repositories", ScreenGitHubRepo},
+	{"⚙️ Configure search", "Set up search filters and preferences", ScreenSearchConfig},
+	{"📁 Update local package", "Scan and update packages in current Flutter project", ScreenScanDirectories},
+	{"🔄 Check for Flutter-PM updates", "Update Flutter Package Manager to latest version", ScreenSelfUpdate},
 }
 
 // timerTickMsg represents a timer tick
@@ -145,17 +146,14 @@ func (m *MainMenuModel) View() string {
 	m.menuLines = append(m.menuLines, "")
 	m.menuLines = append(m.menuLines, "📱 Flutter Package Manager - Main Menu:")
 
-	// Pre-compute emoji array to avoid switch in hot path
-	emojis := [4]string{"📁", "🐙", "⚙️", "🔄"}
-
 	// Menu options with optimized string building
 	for i, option := range menuOptions {
 		var line string
 		if c == i {
-			line = "► " + strconv.Itoa(i+1) + ". " + emojis[i] + " " + option.title
+			line = "► " + strconv.Itoa(i+1) + ". " + option.title
 			line = m.checkboxStyle.Render(line)
 		} else {
-			line = "  " + strconv.Itoa(i+1) + ". " + emojis[i] + " " + option.title
+			line = "  " + strconv.Itoa(i+1) + ". " + option.title
 		}
 		m.menuLines = append(m.menuLines, line)
 	}
@@ -175,7 +173,7 @@ func (m *MainMenuModel) View() string {
 	m.menuLines = append(m.menuLines, "")
 
 	// Help text in beautiful style
-	helpText := "↑/↓ navigate • enter/1-4 select • q quit"
+	helpText := "↑/↓ navigate • enter/1-5 select • q quit"
 	m.menuLines = append(m.menuLines, m.subtleStyle.Render(helpText))
 
 	// Join all lines efficiently using pre-allocated builder

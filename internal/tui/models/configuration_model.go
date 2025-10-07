@@ -35,7 +35,7 @@ type ConfigurationModel struct {
 	helpStyle     lipgloss.Style
 }
 
-// NewConfigurationModel creates a new configuration model
+// NewConfigurationModel creates a new package configuration model
 func NewConfigurationModel(cfg core.Config, logger *core.Logger, shared *AppState) *ConfigurationModel {
 	return &ConfigurationModel{
 		cfg:          cfg,
@@ -79,10 +79,13 @@ func (m *ConfigurationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	default:
 		// Update current input
-		if m.currentRepo < len(m.inputs) {
-			var cmd tea.Cmd
-			m.inputs[m.currentRepo*3+m.currentField], cmd = m.inputs[m.currentRepo*3+m.currentField].Update(msg)
-			cmds = append(cmds, cmd)
+		if m.currentRepo < len(m.shared.SelectedDependencies) && len(m.inputs) > 0 {
+			inputIndex := m.currentRepo*3 + m.currentField
+			if inputIndex >= 0 && inputIndex < len(m.inputs) {
+				var cmd tea.Cmd
+				m.inputs[inputIndex], cmd = m.inputs[inputIndex].Update(msg)
+				cmds = append(cmds, cmd)
+			}
 		}
 	}
 
@@ -91,7 +94,7 @@ func (m *ConfigurationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the configuration screen
 func (m *ConfigurationModel) View() string {
-	if len(m.shared.SelectedRepos) == 0 {
+	if len(m.shared.SelectedDependencies) == 0 {
 		return m.headerStyle.Render("❌ No Repositories Selected") + "\n\nPlease go back and select repositories first.\n\nPress Q to return to main menu"
 	}
 
@@ -99,11 +102,11 @@ func (m *ConfigurationModel) View() string {
 
 	// Header
 	b.WriteString(m.headerStyle.Render("🔧 Package Configuration") + "\n")
-	b.WriteString(fmt.Sprintf("Configure %d selected packages:\n\n", len(m.shared.SelectedRepos)))
+	b.WriteString(fmt.Sprintf("Configure %d selected packages:\n\n", len(m.shared.SelectedDependencies)))
 
 	// Show current repository being configured
-	if m.currentRepo < len(m.shared.SelectedRepos) {
-		repo := m.shared.SelectedRepos[m.currentRepo]
+	if m.currentRepo < len(m.shared.SelectedDependencies) {
+		repo := m.shared.SelectedDependencies[m.currentRepo]
 		b.WriteString(fmt.Sprintf("📦 Configuring: %s/%s\n\n", repo.Owner, repo.Name))
 
 		// Show input fields
@@ -122,14 +125,14 @@ func (m *ConfigurationModel) View() string {
 		}
 
 		// Progress
-		b.WriteString(fmt.Sprintf("Progress: %d/%d packages configured\n\n", m.currentRepo+1, len(m.shared.SelectedRepos)))
+		b.WriteString(fmt.Sprintf("Progress: %d/%d packages configured\n\n", m.currentRepo+1, len(m.shared.SelectedDependencies)))
 	} else {
 		b.WriteString(m.headerStyle.Render("✅ All Packages Configured") + "\n\n")
 		b.WriteString("Press Enter to continue to confirmation\n\n")
 	}
 
 	// Help
-	if m.currentRepo < len(m.shared.SelectedRepos) {
+	if m.currentRepo < len(m.shared.SelectedDependencies) {
 		b.WriteString(m.helpStyle.Render("tab: next field • shift+tab: prev field • enter: next package • q: back"))
 	} else {
 		b.WriteString(m.helpStyle.Render("enter: continue • q: back"))
@@ -145,7 +148,7 @@ func (m *ConfigurationModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, TransitionToScreen(ScreenMainMenu)
 
 	case "tab":
-		if m.currentRepo < len(m.shared.SelectedRepos) {
+		if m.currentRepo < len(m.shared.SelectedDependencies) {
 			m.currentField++
 			if m.currentField >= 3 {
 				m.currentField = 0
@@ -155,7 +158,7 @@ func (m *ConfigurationModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "shift+tab":
-		if m.currentRepo < len(m.shared.SelectedRepos) {
+		if m.currentRepo < len(m.shared.SelectedDependencies) {
 			m.currentField--
 			if m.currentField < 0 {
 				m.currentField = 2
@@ -165,7 +168,7 @@ func (m *ConfigurationModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		if m.currentRepo >= len(m.shared.SelectedRepos) {
+		if m.currentRepo >= len(m.shared.SelectedDependencies) {
 			// All configured, move to confirmation
 			m.generatePackageSpecs()
 			return m, TransitionToScreen(ScreenConfirmation)
@@ -179,7 +182,7 @@ func (m *ConfigurationModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	default:
 		// Pass to current input
-		if m.currentRepo < len(m.shared.SelectedRepos) {
+		if m.currentRepo < len(m.shared.SelectedDependencies) {
 			var cmd tea.Cmd
 			inputIndex := m.currentRepo*3 + m.currentField
 			if inputIndex < len(m.inputs) {
@@ -194,11 +197,18 @@ func (m *ConfigurationModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // setupInputs creates text inputs for all repositories
 func (m *ConfigurationModel) setupInputs() {
+	// Safety check - ensure we have selected repositories
+	if len(m.shared.SelectedDependencies) == 0 {
+		m.logger.Debug("configuration", "No repositories selected for configuration")
+		m.complete = true // Mark as complete to skip configuration
+		return
+	}
+
 	// Create 3 inputs per repository (name, ref, subdir)
-	totalInputs := len(m.shared.SelectedRepos) * 3
+	totalInputs := len(m.shared.SelectedDependencies) * 3
 	m.inputs = make([]textinput.Model, totalInputs)
 
-	for i, repo := range m.shared.SelectedRepos {
+	for i, repo := range m.shared.SelectedDependencies {
 		// Package name input
 		nameInput := textinput.New()
 		nameInput.Placeholder = repo.Name
@@ -225,25 +235,52 @@ func (m *ConfigurationModel) setupInputs() {
 
 // focusCurrentInput focuses the current input field
 func (m *ConfigurationModel) focusCurrentInput() {
+	// Safety check - ensure we have inputs
+	if len(m.inputs) == 0 {
+		m.logger.Debug("configuration", "No inputs available to focus")
+		return
+	}
+
 	// Blur all inputs
 	for i := range m.inputs {
 		m.inputs[i].Blur()
 	}
 
 	// Focus current input
-	if m.currentRepo < len(m.shared.SelectedRepos) {
+	if m.currentRepo < len(m.shared.SelectedDependencies) {
 		inputIndex := m.currentRepo*3 + m.currentField
-		if inputIndex < len(m.inputs) {
+		if inputIndex >= 0 && inputIndex < len(m.inputs) {
 			m.inputs[inputIndex].Focus()
+		} else {
+			m.logger.Debug("configuration", fmt.Sprintf("Invalid input index: %d (total: %d)", inputIndex, len(m.inputs)))
 		}
 	}
 }
 
 // generatePackageSpecs creates package specifications from the inputs
 func (m *ConfigurationModel) generatePackageSpecs() {
-	m.packageSpecs = make([]core.PkgSpec, len(m.shared.SelectedRepos))
+	// Safety check - ensure we have selected repositories
+	if len(m.shared.SelectedDependencies) == 0 {
+		m.logger.Debug("configuration", "No repositories to generate package specs for")
+		return
+	}
 
-	for i, repo := range m.shared.SelectedRepos {
+	m.packageSpecs = make([]core.PkgSpec, len(m.shared.SelectedDependencies))
+
+	for i, repo := range m.shared.SelectedDependencies {
+		// Safety check for input array bounds
+		if i*3+2 >= len(m.inputs) {
+			m.logger.Debug("configuration", fmt.Sprintf("Insufficient inputs for repo %d", i))
+			// Create default spec
+			m.packageSpecs[i] = core.PkgSpec{
+				Name:   repo.Name,
+				URL:    repo.URL,
+				Ref:    "main",
+				Subdir: "",
+			}
+			continue
+		}
+
 		name := m.inputs[i*3].Value()
 		if name == "" {
 			name = repo.Name

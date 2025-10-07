@@ -22,7 +22,10 @@
       "Bash(./flutter-pm.exe autotest --help)",
       "Bash(go vet:*)",
       "WebFetch(domain:github.com)",
-      "Bash(go test:*)"
+      "Bash(go test:*)",
+      "Bash(FLUTTER_PM_DEBUG=1 go run . --help)",
+      "WebFetch(domain:pkg.go.dev)",
+      "Bash(find:*)"
     ],
     "defaultMode": "acceptEdits"
   }

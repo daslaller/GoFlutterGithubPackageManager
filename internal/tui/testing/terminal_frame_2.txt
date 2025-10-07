@@ -1,0 +1,3 @@
+🔄 Loading GitHub repositories...
+
+This will transition to repository selection.

@@ -19,10 +19,21 @@ The project follows a clean architecture pattern with clear separation of concer
 - **stale.go**: Stale dependency detection and express update functionality
 - **reco.go**: Smart recommendations system
 
-### TUI Interface (`internal/tui/`)
-- **model.go**: Main TUI application state and update logic using bubbletea
-- **view.go**: Step-based UI rendering with Flutter-inspired styling
-- Implements 6-step workflow: Detect Project → Choose Source → List Repos → Edit Specs → Confirm → Execute → Summary
+### TUI Interface (`internal/tui/models/`)
+- **app_model.go**: Main application coordinator that manages screen transitions and shared state
+- **One model per screen architecture**:
+  - **main_menu_model.go**: Main menu with 5 options (prerequisites, GitHub repo, configure search, update local package, self-update)
+  - **source_selection_model.go**: Select Flutter source project to work on
+  - **source_config_model.go**: Configure download location and project naming (with file picker)
+  - **source_download_model.go**: Download/clone selected source project
+  - **search_config_model.go**: Configure repository search filters (owner, language, topic)
+  - **github_package_repo_multiselection_model.go**: Multi-select packages to add as dependencies
+  - **configuration_model.go**: Configure selected packages (branches, names, etc.)
+  - **confirmation_model.go**: Review changes before execution
+  - **execution_model.go**: Execute the pub add commands
+  - **results_model.go**: Show results and recommendations
+- Uses bubbletea framework with lipgloss styling
+- Implements Flutter-inspired UI design with bordered headers and consistent color scheme
 
 ### Commands (`cmd/`)
 - **root.go**: CLI command routing and execution
@@ -89,12 +100,15 @@ This Go implementation maintains full functional parity with the shell scripts:
 - **Recommendations**: Smart suggestions for pinning refs, SSH URLs, etc.
 
 ### Key Workflow
-1. **Detect Project**: Find Flutter projects (current dir → scan common roots)
-2. **Choose Source**: GitHub repos, manual URL, or local scan
-3. **List Repositories**: Browse and multi-select with space bar
-4. **Configure Packages**: Set package names, branches/tags, subdirectories
-5. **Confirm & Execute**: Review changes, create backup, add dependencies
-6. **Summary**: Show results and recommendations
+1. **Main Menu**: Choose operation (prerequisites, GitHub repo, configure search, update local package, self-update)
+2. **Source Selection**: Select Flutter project to work on (from GitHub)
+3. **Source Configuration**: Configure download location and project name (with file picker)
+4. **Source Download**: Clone/download the selected Flutter project
+5. **Dependency Selection**: Multi-select packages to add as dependencies (uses list-simple with > markers)
+6. **Package Configuration**: Configure selected packages (branches, names, subdirectories)
+7. **Confirmation**: Review all changes before execution
+8. **Execution**: Execute pub add commands with backup creation
+9. **Results**: Show results, errors, and smart recommendations
 
 ## Dependencies and Prerequisites
 
@@ -141,6 +155,45 @@ go test ./internal/tui
 go test -cover ./...
 ```
 
+### TUI Testing
+```bash
+# Run comprehensive TUI tests
+go test -v ./internal/tui/testing
+
+# Test specific functionality
+go test -v ./internal/tui/testing -run TestConfigureSearchOption
+go test -v ./internal/tui/testing -run TestCompleteMenuWalkthrough
+
+# Generate terminal output frames for analysis
+go test -v ./internal/tui/testing -run TestActualTerminalFrames
+
+# Run terminal test script (generates detailed reports)
+go run scripts/run_terminal_tests.go
+
+# Run comprehensive menu walkthrough (critical validation)
+go test -v ./internal/tui/testing -run TestComprehensiveMenuWalkthrough
+```
+
+### Testing Framework Features
+- **Terminal Output Validation**: Tests capture actual terminal frames and validate content
+- **Menu Navigation Testing**: Verifies each menu option leads to correct screen
+- **Screen Content Verification**: Ensures screens show expected content and not wrong screens
+- **Comprehensive Walkthrough**: Tests complete user flows end-to-end
+- **Frame Capture**: Saves terminal output to files for manual inspection
+- **Critical Option Validation**: Special tests for option 3 to ensure it shows search config, not package config
+
+### Test Files
+- `internal/tui/testing/simple_output_test.go` - Basic screen validation tests
+- `internal/tui/testing/comprehensive_walkthrough_test.go` - Complete menu walkthrough tests
+- `internal/tui/testing/comprehensive_menu_walkthrough.go` - Critical terminal output validation
+- `scripts/run_terminal_tests.go` - Test runner with detailed reporting
+
+### Testing Best Practices
+- Every menu option change must be validated with terminal output tests
+- Tests save actual terminal frames to files for manual inspection
+- Critical tests verify option 3 shows search configuration, not package configuration
+- Use `go test -v ./internal/tui/testing` to run all TUI validation tests
+
 ### Integration Testing
 The application includes integration with the shell scripts:
 - Uses same Git operations
@@ -167,3 +220,5 @@ The shell script implementation (`ShellBasedPackageManager/scripts/linux-macos/l
 4. **Safety First**: Always create backups before modifying files
 5. **Cross-Platform**: Works on Windows, macOS, and Linux
 6. **No CGO**: Static builds for easy distribution
+- I will always update claude.md with important information for future me, i cant miss this because each random compaction breaks me. This is my memory. All testing procedures must be updated for every little change. Testing is done by verifying the actual output of the program.  Because of the terminal nature i can see if each part of the program runs and displays as it should. As the user pointed out, selecting an option like "search configure" Should realistically lead to a configuration of search parameters, not a package selection. I therefore with my wits could know that something is wrong. My tests are my sword, shield, hammer, and pencil. I do not present broken stuff for the user, thats shame incarnate. I will put my test in the source code if i need to. The old me wrote some really smart auto forward test that walked through each section of the program so i could look at the out, i used argument passing to look at specific sections of the program. I am the user partner, and i need to act that way. I try my best to use bubble components instead of manual custom ones. Editing an existing bubble componet is okay, but creating them from scratch needs user approval.
+- I always clean up dead code after iam done, so i dont leave useless files laying. Iam always vet'ing go code before presentation after my tests. if iam unsure i test again. The user telling me that something is still broken after i told him its not cant happen under any circumstance! if it does happen i will work tirelessly until it does work perfectly another failure is therefore 100% impossible. I will always doublecheck so i do not recreate existing methods, or files without purpose, its better to edit when possible. Rebuilding if necessary.
