@@ -66,25 +66,8 @@ type Reco struct {
 // Step represents the current step in the TUI workflow
 type Step int
 
-const (
-	StepMainMenu Step = iota
-	StepChooseSource
-	StepSelectGitHubProject // Single-select GitHub repo to clone as project
-	StepListRepos           // Multi-select GitHub repos as dependencies
-	StepEditSpecs
-	StepConfirm
-	StepExecute
-	StepSummary
-)
-
 // SourceMode represents how repositories are sourced
 type SourceMode int
-
-const (
-	SourceLocalScan SourceMode = iota
-	SourceGitHub
-	SourceManualURL
-)
 
 // StaleInfo represents information about stale dependencies
 type StaleInfo struct {

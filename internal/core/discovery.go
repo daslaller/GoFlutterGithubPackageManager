@@ -21,7 +21,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -206,11 +205,6 @@ func CommonRoots() []string {
 }
 
 // scanDirectoryForProjects recursively scans a directory for Flutter projects with optimized I/O
-func scanDirectoryForProjects(dir string, maxDepth int) ([]Project, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	return scanDirectoryForProjectsWithContext(ctx, dir, maxDepth)
-}
 
 // scanDirectoryForProjectsWithContext recursively scans with context cancellation
 func scanDirectoryForProjectsWithContext(ctx context.Context, dir string, maxDepth int) ([]Project, error) {
@@ -273,7 +267,7 @@ func scanDirectoryForProjectsWithContext(ctx context.Context, dir string, maxDep
 	default:
 	}
 
-	// Process valid directories concurrently if there are enough of them
+	// Process valid directories concurrently if there weis enough of them
 	if len(validDirs) > 4 && maxDepth > 1 {
 		return scanDirectoriesConcurrentWithContext(ctx, dir, validDirs, maxDepth-1)
 	}
@@ -300,11 +294,6 @@ func scanDirectoryForProjectsWithContext(ctx context.Context, dir string, maxDep
 }
 
 // scanDirectoriesConcurrent scans multiple directories concurrently for better performance
-func scanDirectoriesConcurrent(baseDir string, dirNames []string, maxDepth int) ([]Project, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	return scanDirectoriesConcurrentWithContext(ctx, baseDir, dirNames, maxDepth)
-}
 
 // scanDirectoriesConcurrentWithContext scans with proper context handling
 func scanDirectoriesConcurrentWithContext(ctx context.Context, baseDir string, dirNames []string, maxDepth int) ([]Project, error) {
@@ -432,125 +421,5 @@ func extractProjectNameOptimized(pubspecPath string) (string, error) {
 
 // ValidateProject performs basic validation on a Flutter project
 // This mirrors the shell script's project validation logic
-func ValidateProject(projectPath string, autoFix bool) ([]string, error) {
-	var messages []string
-
-	// Check if pubspec.yaml exists
-	pubspecPath := filepath.Join(projectPath, "pubspec.yaml")
-	if _, err := os.Stat(pubspecPath); os.IsNotExist(err) {
-		return messages, fmt.Errorf("pubspec.yaml not found in %s", projectPath)
-	}
-
-	// Check if lib directory exists
-	libPath := filepath.Join(projectPath, "lib")
-	if _, err := os.Stat(libPath); os.IsNotExist(err) {
-		messages = append(messages, "lib directory not found")
-		if autoFix {
-			if err := os.MkdirAll(libPath, 0755); err == nil {
-				messages = append(messages, "created lib directory")
-			}
-		}
-	}
-
-	// Check if main.dart exists
-	mainPath := filepath.Join(projectPath, "lib", "main.dart")
-	if _, err := os.Stat(mainPath); os.IsNotExist(err) {
-		messages = append(messages, "lib/main.dart not found")
-		if autoFix {
-			mainContent := `
-import 'package:flutter/material.dart';
-
-void main() {
-  runApp(const MyApp());
-}
-
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
-    );
-  }
-}
-
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  final String title;
-
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
-}
-
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-
-  void _incrementCounter() {
-    setState(() {
-      _counter++;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: Text(widget.title),
-      ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text(
-              'You have pushed the button this many times:',
-            ),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
-        ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ),
-    );
-  }
-}
-`
-			if err := os.WriteFile(mainPath, []byte(mainContent), 0644); err == nil {
-				messages = append(messages, "created lib/main.dart")
-			}
-		}
-	}
-
-	// Check if it's a Git repository
-	gitPath := filepath.Join(projectPath, ".git")
-	if _, err := os.Stat(gitPath); os.IsNotExist(err) {
-		messages = append(messages, "not a Git repository")
-		if autoFix {
-			if err := runGitInit(projectPath); err == nil {
-				messages = append(messages, "initialized Git repository")
-			}
-		}
-	}
-
-	return messages, nil
-}
 
 // runGitInit initializes a Git repository
-func runGitInit(projectPath string) error {
-	cmd := exec.Command("git", "init")
-	cmd.Dir = projectPath
-	return cmd.Run()
-}

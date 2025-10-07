@@ -1,4 +1,4 @@
-// Package components provides reusable view components for the TUI application
+// Package components provide reusable view components for the TUI application
 // following the bubbles view component pattern for better modularity and state management.
 
 package components

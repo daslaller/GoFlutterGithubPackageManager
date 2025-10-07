@@ -142,13 +142,7 @@ func CheckStalePrecise(logger *Logger, projectPath string) ([]StaleInfo, error) 
 	return staleInfo, nil
 }
 
-// Buffer pool for file I/O operations
 var (
-	bufferPool = sync.Pool{
-		New: func() interface{} {
-			return make([]byte, 8192) // 8KB buffer
-		},
-	}
 	readerPool = sync.Pool{
 		New: func() interface{} {
 			return bufio.NewReaderSize(nil, 8192)
@@ -183,7 +177,12 @@ func parsePubspecLock(lockPath string) (*PubspecLock, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+
+		}
+	}(file)
 
 	// Get a buffered reader from pool
 	reader := readerPool.Get().(*bufio.Reader)
@@ -246,7 +245,7 @@ func parsePubspecLock(lockPath string) (*PubspecLock, error) {
 		}
 	}
 
-	// Don't forget the last package
+	// Remember the last package
 	if currentPkg != "" {
 		lock.Dependencies[currentPkg] = currentDep
 	}
@@ -554,99 +553,3 @@ func CheckSelfUpdate(logger *Logger, cfg *Config) ActionResult {
 }
 
 // NuclearCacheUpdate performs nuclear cache clearing + update (remove pubspec.lock + clear pub cache)
-func NuclearCacheUpdate(logger *Logger, cfg *Config, projectPath string) ActionResult {
-	logger.Info("nuclear", "Starting nuclear cache update (remove pubspec.lock + clear pub cache)")
-
-	// Create backup first
-	backupInfo, err := CreateBackup(projectPath)
-	if err != nil {
-		logger.Error("backup", err)
-	} else {
-		logger.Info("backup", fmt.Sprintf("Created backup: %s", backupInfo.BackupPath))
-	}
-
-	var logs []string
-
-	// Step 1: Remove pubspec.lock
-	lockPath := filepath.Join(projectPath, "pubspec.lock")
-	if _, err := os.Stat(lockPath); err == nil {
-		if cfg.DryRun {
-			logs = append(logs, "DRY RUN: would remove pubspec.lock")
-		} else {
-			if err := os.Remove(lockPath); err != nil {
-				return ActionResult{
-					OK:   false,
-					Err:  fmt.Sprintf("failed to remove pubspec.lock: %v", err),
-					Logs: logs,
-				}
-			}
-			logs = append(logs, "Removed pubspec.lock")
-			logger.Info("nuclear", "Removed pubspec.lock")
-		}
-	} else {
-		logs = append(logs, "pubspec.lock not found (already clean)")
-	}
-
-	// Step 2: Clear pub cache
-	tool, err := FindPubTool()
-	if err != nil {
-		return ActionResult{
-			OK:   false,
-			Err:  fmt.Sprintf("pub tool not found: %v", err),
-			Logs: logs,
-		}
-	}
-
-	cacheArgs := []string{"pub", "cache", "clean"}
-	logger.LogCommand("nuclear", tool, cacheArgs)
-
-	if cfg.DryRun {
-		logs = append(logs, fmt.Sprintf("DRY RUN: %s %s", tool, strings.Join(cacheArgs, " ")))
-	} else {
-		cmd := exec.Command(tool, cacheArgs...)
-		output, err := cmd.CombinedOutput()
-		cacheOutput := strings.TrimSpace(string(output))
-		logs = append(logs, cacheOutput)
-
-		if err != nil {
-			logger.Error("nuclear", fmt.Errorf("pub cache clean failed: %v", err))
-			// Continue anyway - this is not critical
-			logs = append(logs, "Warning: pub cache clean failed, continuing...")
-		} else {
-			logger.Info("nuclear", "Cleared pub cache")
-		}
-	}
-
-	// Step 3: Run pub get to rebuild everything
-	getArgs := []string{"pub", "get"}
-	logger.LogCommand("nuclear", tool, getArgs)
-
-	if cfg.DryRun {
-		logs = append(logs, fmt.Sprintf("DRY RUN: %s %s", tool, strings.Join(getArgs, " ")))
-		return ActionResult{
-			OK:      true,
-			Message: "Would perform nuclear cache update",
-			Logs:    logs,
-		}
-	}
-
-	cmd := exec.Command(tool, getArgs...)
-	cmd.Dir = projectPath
-	output, err := cmd.CombinedOutput()
-	getOutput := strings.TrimSpace(string(output))
-	logs = append(logs, getOutput)
-
-	if err != nil {
-		return ActionResult{
-			OK:   false,
-			Err:  fmt.Sprintf("pub get failed: %v", err),
-			Logs: logs,
-		}
-	}
-
-	return ActionResult{
-		OK:      true,
-		Message: "Nuclear cache update completed - all packages refreshed from GitHub",
-		Logs:    logs,
-	}
-}

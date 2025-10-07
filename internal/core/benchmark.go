@@ -44,12 +44,6 @@ type PerformanceBenchmark struct {
 }
 
 // NewPerformanceBenchmark creates a new benchmark instance
-func NewPerformanceBenchmark(logger *Logger) *PerformanceBenchmark {
-	return &PerformanceBenchmark{
-		logger:  logger,
-		results: make([]BenchmarkResult, 0),
-	}
-}
 
 // BenchmarkProjectDiscovery benchmarks the project discovery optimization
 func (pb *PerformanceBenchmark) BenchmarkProjectDiscovery() BenchmarkResult {

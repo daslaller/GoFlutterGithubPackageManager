@@ -21,7 +21,6 @@ package core
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -123,43 +122,6 @@ func GitClone(logger *Logger, cfg *Config, url, dir, ref string) ActionResult {
 		Message: fmt.Sprintf("Successfully cloned %s", url),
 		Logs:    logs,
 	}
-}
-
-// GitInit initializes a new git repository
-func GitInit(projectPath string) error {
-	cmd := exec.Command("git", "init")
-	cmd.Dir = projectPath
-	return cmd.Run()
-}
-
-// IsGitRepository checks if a directory is a git repository
-func IsGitRepository(path string) bool {
-	cmd := exec.Command("git", "rev-parse", "--git-dir")
-	cmd.Dir = path
-	return cmd.Run() == nil
-}
-
-// GetGitRemotes gets the remote URLs for a git repository
-func GetGitRemotes(repoPath string) (map[string]string, error) {
-	cmd := exec.Command("git", "remote", "-v")
-	cmd.Dir = repoPath
-
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get git remotes: %w", err)
-	}
-
-	remotes := make(map[string]string)
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-
-	for _, line := range lines {
-		parts := strings.Fields(line)
-		if len(parts) >= 2 && strings.HasSuffix(line, "(fetch)") {
-			remotes[parts[0]] = parts[1]
-		}
-	}
-
-	return remotes, nil
 }
 
 // GitHubRepo represents a GitHub repository from gh CLI
@@ -299,100 +261,8 @@ func (c *GitHubCache) InvalidateCache() {
 }
 
 // GetRepoBranches gets available branches for a repository with caching
-func GetRepoBranches(repoURL string) ([]string, error) {
-	cacheKey := "branches:" + repoURL
-
-	// Try cache first (branches don't change frequently)
-	gitLsRemoteCache.mu.RLock()
-	if cached, exists := gitLsRemoteCache.cache[cacheKey]; exists {
-		gitLsRemoteCache.mu.RUnlock()
-		return strings.Split(cached, ","), nil
-	}
-	gitLsRemoteCache.mu.RUnlock()
-
-	cmd := exec.Command("git", "ls-remote", "--heads", repoURL)
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list branches: %w", err)
-	}
-
-	var branches []string
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			ref := parts[1]
-			if strings.HasPrefix(ref, "refs/heads/") {
-				branch := strings.TrimPrefix(ref, "refs/heads/")
-				branches = append(branches, branch)
-			}
-		}
-	}
-
-	if len(branches) == 0 {
-		branches = []string{"main"} // Default fallback
-	}
-
-	// Cache the results
-	gitLsRemoteCache.mu.Lock()
-	gitLsRemoteCache.cache[cacheKey] = strings.Join(branches, ",")
-	gitLsRemoteCache.mu.Unlock()
-	go gitLsRemoteCache.cleanupAfterTTL(cacheKey)
-
-	return branches, nil
-}
 
 // GetRepoTags gets available tags for a repository with caching
-func GetRepoTags(repoURL string) ([]string, error) {
-	cacheKey := "tags:" + repoURL
-
-	// Try cache first (tags are immutable once created)
-	gitLsRemoteCache.mu.RLock()
-	if cached, exists := gitLsRemoteCache.cache[cacheKey]; exists {
-		gitLsRemoteCache.mu.RUnlock()
-		if cached == "" {
-			return []string{}, nil
-		}
-		return strings.Split(cached, ","), nil
-	}
-	gitLsRemoteCache.mu.RUnlock()
-
-	cmd := exec.Command("git", "ls-remote", "--tags", repoURL)
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list tags: %w", err)
-	}
-
-	var tags []string
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			ref := parts[1]
-			if strings.HasPrefix(ref, "refs/tags/") && !strings.HasSuffix(ref, "^{}") {
-				tag := strings.TrimPrefix(ref, "refs/tags/")
-				tags = append(tags, tag)
-			}
-		}
-	}
-
-	// Cache the results
-	cacheValue := strings.Join(tags, ",")
-	gitLsRemoteCache.mu.Lock()
-	gitLsRemoteCache.cache[cacheKey] = cacheValue
-	gitLsRemoteCache.mu.Unlock()
-	go gitLsRemoteCache.cleanupAfterTTL(cacheKey)
-
-	return tags, nil
-}
 
 // cleanupAfterTTL removes cache entry after TTL expires with proper race condition handling
 func (c *GitLsRemoteCache) cleanupAfterTTL(key string) {
@@ -429,47 +299,3 @@ func GetGitVersion() (string, error) {
 }
 
 // ValidateGitURL checks if a Git URL is valid and accessible with enhanced security
-func ValidateGitURL(url string) error {
-	// Input validation to prevent command injection
-	if url == "" {
-		return fmt.Errorf("empty git URL")
-	}
-
-	// Enhanced validation to prevent command injection
-	if strings.ContainsAny(url, ";|&$`\n\r\t'\"\\") {
-		return fmt.Errorf("invalid characters in git URL")
-	}
-
-	// Check for common protocol patterns (more restrictive)
-	validPrefixes := []string{"https://", "http://", "git@", "ssh://"}
-	hasValidPrefix := false
-	for _, prefix := range validPrefixes {
-		if strings.HasPrefix(strings.ToLower(url), prefix) {
-			hasValidPrefix = true
-			break
-		}
-	}
-	if !hasValidPrefix {
-		return fmt.Errorf("invalid git URL protocol (must start with https://, http://, git@, or ssh://)")
-	}
-
-	// Limit URL length to prevent buffer overflow attacks
-	if len(url) > 2048 {
-		return fmt.Errorf("git URL too long (max 2048 characters)")
-	}
-
-	// Use timeout and secure environment for git command
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--exit-code", url, "HEAD")
-	cmd.Env = []string{
-		"GIT_TERMINAL_PROMPT=0", // Disable interactive prompts
-		"GIT_ASKPASS=true",      // Disable password prompts
-	}
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("invalid or inaccessible git URL: %s", url)
-	}
-	return nil
-}

@@ -8,10 +8,9 @@ package components
 
 import (
 	"fmt"
-	"strings"
+	"strconv"
 	"time"
 
-	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/daslaller/GoFlutterGithubPackageManager/internal/core"
@@ -21,15 +20,16 @@ import (
 type MainMenuView struct {
 	cfg            core.Config
 	logger         *core.Logger
-	list           list.Model
+	choice         int
 	selectedChoice int
 	timeRemaining  int
 	complete       bool
 
 	// Styling
-	headerStyle  lipgloss.Style
-	menuStyle    lipgloss.Style
-	timeoutStyle lipgloss.Style
+	headerStyle   lipgloss.Style
+	checkboxStyle lipgloss.Style
+	subtleStyle   lipgloss.Style
+	timeoutStyle  lipgloss.Style
 }
 
 // MainMenuData represents data passed to the main menu
@@ -46,72 +46,34 @@ type MainMenuResult struct {
 
 // NewMainMenuView creates a new main menu view component
 func NewMainMenuView(cfg core.Config, logger *core.Logger) *MainMenuView {
-	// Create menu items with shell script parity
-	items := []list.Item{
-		MenuItem{number: 1, title: "Scan directories", description: "Scan for Flutter projects in common directories"},
-		MenuItem{number: 2, title: "GitHub repo", description: "Browse and select packages from GitHub repositories"},
-		MenuItem{number: 3, title: "Configure search", description: "Set up search filters and preferences"},
-		MenuItem{number: 6, title: "🔄 Check for Flutter-PM updates", description: "Update Flutter Package Manager to latest version"},
-	}
-
-	// Create list with styling
-	l := list.New(items, NewMainMenuDelegate(), 0, 0)
-	l.Title = "📱 Flutter Package Manager - Main Menu"
-	l.SetShowStatusBar(false)
-	l.SetFilteringEnabled(false)
-	l.SetShowHelp(false)
-
 	return &MainMenuView{
 		cfg:           cfg,
 		logger:        logger,
-		list:          l,
-		timeRemaining: 60, // 60 second timeout (shell script behavior)
+		choice:        0,  // Start with first option selected
+		timeRemaining: 60, // 60-second timeout (shell script behavior)
 
-		// Initialize styles
+		// Initialize styles following bubbletea documentation
 		headerStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#8B5CF6")).
-			Background(lipgloss.Color("#F3F4F6")).
-			Bold(true).
-			Width(60).
-			Align(lipgloss.Center).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#8B5CF6")),
+			Foreground(lipgloss.Color("211")).
+			Bold(true),
 
-		menuStyle: lipgloss.NewStyle().
-			Padding(1, 2),
+		checkboxStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("212")),
+
+		subtleStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241")),
 
 		timeoutStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#6B7280")).
-			Italic(true),
+			Foreground(lipgloss.Color("79")),
 	}
 }
 
-// MenuItem represents a menu item
-type MenuItem struct {
-	number      int
-	title       string
-	description string
-}
-
-func (i MenuItem) Title() string       { return fmt.Sprintf("%d. %s", i.number, i.title) }
-func (i MenuItem) Description() string { return i.description }
-func (i MenuItem) FilterValue() string { return i.title }
-
-// NewMainMenuDelegate creates a delegate for main menu items
-func NewMainMenuDelegate() list.DefaultDelegate {
-	d := list.NewDefaultDelegate()
-
-	d.Styles.SelectedTitle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FFFFFF")).
-		Background(lipgloss.Color("#8B5CF6")).
-		Padding(0, 1).
-		Bold(true)
-
-	d.Styles.SelectedDesc = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#E5E7EB")).
-		Background(lipgloss.Color("#8B5CF6"))
-
-	return d
+// checkbox renders a checkbox like in the bubbletea documentation
+func (v *MainMenuView) checkbox(label string, checked bool) string {
+	if checked {
+		return v.checkboxStyle.Render("[x] " + label)
+	}
+	return fmt.Sprintf("[ ] %s", label)
 }
 
 // SetData sets the data for this view component
@@ -134,10 +96,7 @@ func (v *MainMenuView) IsComplete() bool {
 
 // Init initializes the view component
 func (v *MainMenuView) Init() tea.Cmd {
-	return tea.Batch(
-		v.list.StartSpinner(),
-		v.tickTimer(),
-	)
+	return v.tickTimer()
 }
 
 // Update handles messages for this view component
@@ -155,76 +114,74 @@ func (v *MainMenuView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 		return v, v.tickTimer()
-
-	default:
-		var cmd tea.Cmd
-		v.list, cmd = v.list.Update(msg)
-		return v, cmd
 	}
+
+	return v, nil
 }
 
 // View renders this view component
 func (v *MainMenuView) View() string {
-	var b strings.Builder
+	c := v.choice
 
-	// Header
-	b.WriteString(v.headerStyle.Render("📱 Flutter Package Manager") + "\n\n")
+	tpl := "What to do today?\n\n"
+	tpl += "%s\n\n"
+	tpl += "Program quits in %s seconds\n\n"
+	tpl += v.subtleStyle.Render("j/k, up/down: select") + " • " +
+		v.subtleStyle.Render("enter: choose") + " • " +
+		v.subtleStyle.Render("q, esc: quit")
 
-	// Menu content
-	b.WriteString(v.menuStyle.Render(v.list.View()) + "\n\n")
+	choices := fmt.Sprintf(
+		"%s\n%s\n%s\n%s",
+		v.checkbox("Scan directories", c == 0),
+		v.checkbox("GitHub repo", c == 1),
+		v.checkbox("Configure search", c == 2),
+		v.checkbox("🔄 Check for Flutter-PM updates", c == 3),
+	)
 
-	// Timeout information (shell script behavior)
-	timeoutText := fmt.Sprintf("Choice (1-6, default: 1, auto in %ds)", v.timeRemaining)
-	b.WriteString(v.timeoutStyle.Render(timeoutText) + "\n\n")
-
-	// Help text
-	helpText := "1-6 select option • enter default • q quit"
-	b.WriteString(v.timeoutStyle.Render(helpText))
-
-	return b.String()
+	return fmt.Sprintf(tpl, choices, v.timeoutStyle.Render(strconv.Itoa(v.timeRemaining)))
 }
 
 // handleKeys handles key input for the main menu
 func (v *MainMenuView) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "q", "ctrl+c":
+	case "q", "ctrl+c", "esc":
 		return v, tea.Quit
 
-	case "1", "2", "3", "6":
-		// Direct number selection (shell script behavior)
-		choice := 0
-		switch msg.String() {
-		case "1":
-			choice = 1
-		case "2":
-			choice = 2
-		case "3":
-			choice = 3
-		case "6":
-			choice = 6
+	case "j", "down":
+		v.choice++
+		if v.choice > 3 {
+			v.choice = 3
 		}
-		v.selectedChoice = choice
-		v.complete = true
-		return v, nil
+
+	case "k", "up":
+		v.choice--
+		if v.choice < 0 {
+			v.choice = 0
+		}
 
 	case "enter":
-		// Select current item or default
-		if v.list.SelectedItem() != nil {
-			if item, ok := v.list.SelectedItem().(MenuItem); ok {
-				v.selectedChoice = item.number
-			}
-		} else {
-			v.selectedChoice = 1 // Default choice
-		}
+		v.selectedChoice = v.choice + 1 // Convert to 1-based for shell script compatibility
 		v.complete = true
 		return v, nil
 
-	case "up", "k":
-		v.list.CursorUp()
+	case "1":
+		v.selectedChoice = 1
+		v.complete = true
 		return v, nil
 
-	case "down", "j":
-		v.list.CursorDown()
+	case "2":
+		v.selectedChoice = 2
+		v.complete = true
+		return v, nil
+
+	case "3":
+		v.selectedChoice = 3
+		v.complete = true
+		return v, nil
+
+	case "4":
+		v.selectedChoice = 4
+		v.complete = true
 		return v, nil
 	}
 

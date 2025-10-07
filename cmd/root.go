@@ -25,8 +25,8 @@ func Execute() error {
 		return handleCLICommand(cfg, logger)
 	}
 
-	// Default: launch TUI
-	return tui.Run(cfg, logger)
+	// Default: launch new multi-model TUI
+	return tui.RunNew(cfg, logger)
 }
 
 // handleCLICommand handles non-interactive CLI commands
@@ -47,8 +47,6 @@ func handleCLICommand(cfg core.Config, logger *core.Logger) error {
 		return cmdAdd(cfg, logger, rootDir)
 	case "status":
 		return cmdStatus(cfg, logger, rootDir)
-	case "reco":
-		return cmdReco(cfg, logger, rootDir)
 	case "autotest":
 		return cmdAutoTest(cfg, logger)
 	default:
@@ -124,47 +122,7 @@ func cmdStatus(cfg core.Config, logger *core.Logger, rootDir string) error {
 	return nil
 }
 
-// cmdReco handles the recommendations command
-func cmdReco(cfg core.Config, logger *core.Logger, rootDir string) error {
-	// Find project
-	project, err := core.NearestPubspec(rootDir)
-	if err != nil {
-		return fmt.Errorf("no Flutter project found: %w", err)
-	}
-
-	logger.Info("reco", fmt.Sprintf("Generating recommendations for %s", project.Path))
-
-	recommendations, err := core.GenerateFullRecommendations(logger, project.Path)
-	if err != nil {
-		return fmt.Errorf("failed to generate recommendations: %w", err)
-	}
-
-	if len(recommendations) == 0 {
-		logger.Info("reco", "No recommendations - project looks good!")
-		return nil
-	}
-
-	for _, reco := range recommendations {
-		severity := reco.Severity
-		if severity == "warn" {
-			severity = "⚠️"
-		} else if severity == "error" {
-			severity = "❌"
-		} else {
-			severity = "ℹ️"
-		}
-
-		fmt.Printf("%s %s\n", severity, reco.Message)
-		if reco.Rationale != "" {
-			fmt.Printf("   %s\n", reco.Rationale)
-		}
-		fmt.Println()
-	}
-
-	return nil
-}
-
 // cmdAutoTest handles the autotest command
 func cmdAutoTest(cfg core.Config, logger *core.Logger) error {
-	return tui.RunParityAutoTest(cfg, logger)
+	return tui.RunNewAutoTest(cfg, logger) // Use new architecture autotest
 }

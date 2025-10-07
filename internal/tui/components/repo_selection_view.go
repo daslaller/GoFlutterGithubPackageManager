@@ -179,7 +179,10 @@ func (d RepoSelectionDelegate) Render(w io.Writer, m list.Model, index int, item
 		renderedTitle := titleStyle.Width(width).Render(title)
 		renderedDesc := descStyle.Width(width).Render(desc)
 
-		fmt.Fprint(w, renderedTitle+"\n"+renderedDesc)
+		_, err := fmt.Fprint(w, renderedTitle+"\n"+renderedDesc)
+		if err != nil {
+			return
+		}
 		return
 	}
 

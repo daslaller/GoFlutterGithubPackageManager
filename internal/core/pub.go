@@ -98,126 +98,8 @@ func AddGitDependency(logger *Logger, cfg *Config, projectPath string, spec PkgS
 }
 
 // AddGitDependenciesBatch adds multiple git dependencies efficiently in a single operation
-func AddGitDependenciesBatch(logger *Logger, cfg *Config, projectPath string, specs []PkgSpec) ActionResult {
-	if len(specs) == 0 {
-		return ActionResult{
-			OK:      true,
-			Message: "No dependencies to add",
-		}
-	}
 
-	// For single dependency, use the standard method
-	if len(specs) == 1 {
-		return AddGitDependency(logger, cfg, projectPath, specs[0])
-	}
-
-	tool, err := FindPubTool()
-	if err != nil {
-		return ActionResult{
-			OK:  false,
-			Err: err.Error(),
-		}
-	}
-
-	// Build batch command - add all dependencies in one call
-	args := []string{"pub", "add"}
-
-	// Add each dependency specification
-	for _, spec := range specs {
-		depArg := spec.Name + ":git"
-
-		// Build git URL with parameters
-		gitURL := spec.URL
-		if spec.Ref != "" && spec.Ref != "main" {
-			gitURL += "#" + spec.Ref
-		}
-		if spec.Subdir != "" {
-			gitURL += ":" + spec.Subdir
-		}
-
-		args = append(args, depArg, "--git-url", gitURL)
-
-		// Add individual flags if needed
-		if spec.Ref != "" && spec.Ref != "main" {
-			args = append(args, "--git-ref", spec.Ref)
-		}
-
-		if spec.Subdir != "" {
-			args = append(args, "--git-path", spec.Subdir)
-		}
-	}
-
-	logger.LogCommand("pub-batch", tool, args)
-
-	if cfg.DryRun {
-		var dryRunLogs []string
-		for _, spec := range specs {
-			dryRunLogs = append(dryRunLogs, fmt.Sprintf("Would add: %s from %s", spec.Name, spec.URL))
-		}
-		return ActionResult{
-			OK:      true,
-			Message: fmt.Sprintf("Would batch add %d dependencies", len(specs)),
-			Logs:    dryRunLogs,
-		}
-	}
-
-	// Execute the batch command
-	cmd := exec.Command(tool, args...)
-	cmd.Dir = projectPath
-
-	output, err := cmd.CombinedOutput()
-	logs := []string{strings.TrimSpace(string(output))}
-
-	if err != nil {
-		// If batch fails, fall back to individual adds
-		logger.Debug("pub-batch", "Batch add failed, falling back to individual adds")
-		return AddGitDependenciesIndividual(logger, cfg, projectPath, specs)
-	}
-
-	var packageNames []string
-	for _, spec := range specs {
-		packageNames = append(packageNames, spec.Name)
-	}
-
-	return ActionResult{
-		OK:      true,
-		Message: fmt.Sprintf("Successfully batch added %d dependencies: %s", len(specs), strings.Join(packageNames, ", ")),
-		Logs:    logs,
-	}
-}
-
-// AddGitDependenciesIndividual adds dependencies one by one (fallback method)
-func AddGitDependenciesIndividual(logger *Logger, cfg *Config, projectPath string, specs []PkgSpec) ActionResult {
-	var allLogs []string
-	var successCount int
-	var errors []string
-
-	for _, spec := range specs {
-		result := AddGitDependency(logger, cfg, projectPath, spec)
-		allLogs = append(allLogs, result.Logs...)
-
-		if result.OK {
-			successCount++
-		} else {
-			errors = append(errors, fmt.Sprintf("%s: %s", spec.Name, result.Err))
-		}
-	}
-
-	if len(errors) > 0 {
-		return ActionResult{
-			OK:      false,
-			Message: fmt.Sprintf("Added %d/%d dependencies", successCount, len(specs)),
-			Err:     strings.Join(errors, "; "),
-			Logs:    allLogs,
-		}
-	}
-
-	return ActionResult{
-		OK:      true,
-		Message: fmt.Sprintf("Successfully added all %d dependencies individually", len(specs)),
-		Logs:    allLogs,
-	}
-}
+// AddGitDependenciesIndividual adds dependency one by one (fallback method)
 
 // Sync runs pub get to synchronize dependencies
 func Sync(logger *Logger, cfg *Config, projectPath string) ActionResult {
@@ -296,55 +178,8 @@ func CreateBackup(projectPath string) (BackupInfo, error) {
 }
 
 // RestoreBackup restores a backup file
-func RestoreBackup(backupInfo BackupInfo) error {
-	content, err := os.ReadFile(backupInfo.BackupPath)
-	if err != nil {
-		return fmt.Errorf("failed to read backup: %w", err)
-	}
-
-	if err := os.WriteFile(backupInfo.OriginalPath, content, 0644); err != nil {
-		return fmt.Errorf("failed to restore backup: %w", err)
-	}
-
-	return nil
-}
 
 // ValidatePubspec performs basic validation on pubspec.yaml
-func ValidatePubspec(projectPath string) ([]string, error) {
-	var issues []string
-	pubspecPath := filepath.Join(projectPath, "pubspec.yaml")
-
-	content, err := os.ReadFile(pubspecPath)
-	if err != nil {
-		return issues, fmt.Errorf("failed to read pubspec.yaml: %w", err)
-	}
-
-	lines := strings.Split(string(content), "\n")
-	hasName := false
-	hasFlutter := false
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		if strings.HasPrefix(trimmed, "name:") {
-			hasName = true
-		}
-
-		if strings.Contains(trimmed, "flutter:") {
-			hasFlutter = true
-		}
-	}
-
-	if !hasName {
-		issues = append(issues, "Missing 'name' field in pubspec.yaml")
-	}
-
-	if !hasFlutter {
-		issues = append(issues, "Missing Flutter dependency - this might not be a Flutter project")
-	}
-
-	return issues, nil
-}
 
 // Compiled regex patterns for efficient parsing
 var (
@@ -352,7 +187,7 @@ var (
 	// Git dependency pattern: captures package name, URL, ref, and path
 	gitDepPattern *regexp.Regexp
 	// General YAML value extraction patterns
-	namePattern *regexp.Regexp
+	_           *regexp.Regexp
 	urlPattern  *regexp.Regexp
 	refPattern  *regexp.Regexp
 	pathPattern *regexp.Regexp
@@ -366,7 +201,7 @@ func initPubspecRegex() {
 		gitDepPattern = regexp.MustCompile(`(?s)(\s+\w+):\s*\n?\s*git:\s*\n?(?:\s*url:\s*['"]?([^'"\n]+)['"]?\s*\n?)?(?:\s*ref:\s*['"]?([^'"\n]+)['"]?\s*\n?)?(?:\s*path:\s*['"]?([^'"\n]+)['"]?\s*\n?)?`)
 
 		// Individual value patterns for fallback parsing
-		namePattern = regexp.MustCompile(`^\s*name:\s*['"]?([^'"\n]+)['"]?\s*$`)
+		_ = regexp.MustCompile(`^\s*name:\s*['"]?([^'"\n]+)['"]?\s*$`)
 		urlPattern = regexp.MustCompile(`^\s*url:\s*['"]?([^'"\n]+)['"]?\s*$`)
 		refPattern = regexp.MustCompile(`^\s*ref:\s*['"]?([^'"\n]+)['"]?\s*$`)
 		pathPattern = regexp.MustCompile(`^\s*path:\s*['"]?([^'"\n]+)['"]?\s*$`)

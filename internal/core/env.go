@@ -143,7 +143,10 @@ func (l *Logger) Log(level LogLevel, component, message string, data map[string]
 	l.entries = append(l.entries, entry)
 
 	if l.cfg.JSONOutput {
-		json.NewEncoder(os.Stderr).Encode(entry)
+		err := json.NewEncoder(os.Stderr).Encode(entry)
+		if err != nil {
+			return
+		}
 	} else if !l.cfg.Quiet {
 		l.printEntry(entry)
 	}
@@ -195,7 +198,10 @@ func (l *Logger) printEntry(entry LogEntry) {
 		message = fmt.Sprintf("[%s] %s", entry.Component, message)
 	}
 
-	fmt.Fprintf(os.Stderr, "%s%s\n", prefix, message)
+	_, err := fmt.Fprintf(os.Stderr, "%s%s\n", prefix, message)
+	if err != nil {
+		return
+	}
 }
 
 func parseBool(s string) bool {
