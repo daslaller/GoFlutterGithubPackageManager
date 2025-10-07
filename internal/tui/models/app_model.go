@@ -50,6 +50,9 @@ type AppModel struct {
 
 	// Shared application state
 	SharedState *AppState
+
+	// Performance optimization: cache warmer
+	cacheWarmer *core.CacheWarmer
 }
 
 // AppState holds data that needs to be shared between screens
@@ -84,17 +87,22 @@ type ScreenTransitionMsg struct {
 // NewAppModel creates a new main application coordinator
 func NewAppModel(cfg core.Config, logger *core.Logger) *AppModel {
 	sharedState := &AppState{}
+	cacheWarmer := core.NewCacheWarmer(logger, &cfg)
 
 	return &AppModel{
 		cfg:           cfg,
 		logger:        logger,
 		currentScreen: ScreenMainMenu,
 		SharedState:   sharedState,
+		cacheWarmer:   cacheWarmer,
 	}
 }
 
 // Init initializes the app model
 func (m *AppModel) Init() tea.Cmd {
+	// Start background cache warming for better performance
+	m.cacheWarmer.Start()
+
 	// Initialize the first screen (MainMenu)
 	m.mainMenu = NewMainMenuModel(m.cfg, m.logger, m.SharedState)
 	return m.mainMenu.Init()
@@ -115,6 +123,8 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
+			// Stop cache warmer before quitting
+			m.cacheWarmer.Stop()
 			return m, tea.Quit
 		}
 		// Pass other keys to current screen

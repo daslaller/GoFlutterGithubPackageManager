@@ -21,7 +21,8 @@
       "Bash(pkill:*)",
       "Bash(./flutter-pm.exe autotest --help)",
       "Bash(go vet:*)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(go test:*)"
     ],
     "defaultMode": "acceptEdits"
   }

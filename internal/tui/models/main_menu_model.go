@@ -33,6 +33,10 @@ type MainMenuModel struct {
 	ticksStyle    lipgloss.Style
 	checkboxStyle lipgloss.Style
 	headerStyle   lipgloss.Style
+
+	// Performance optimization: pre-allocated render buffer
+	renderBuffer strings.Builder
+	menuLines    []string // Pre-allocated slice for menu lines
 }
 
 // Menu options
@@ -54,7 +58,7 @@ type timerTickMsg struct{}
 
 // NewMainMenuModel creates a new main menu model
 func NewMainMenuModel(cfg core.Config, logger *core.Logger, shared *AppState) *MainMenuModel {
-	return &MainMenuModel{
+	model := &MainMenuModel{
 		cfg:         cfg,
 		logger:      logger,
 		shared:      shared,
@@ -74,7 +78,15 @@ func NewMainMenuModel(cfg core.Config, logger *core.Logger, shared *AppState) *M
 		headerStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("211")).
 			Bold(true),
+
+		// Pre-allocate render buffer and menu lines
+		menuLines: make([]string, 0, 20), // Capacity for typical menu size
 	}
+
+	// Pre-size the string builder for typical content
+	model.renderBuffer.Grow(1024)
+
+	return model
 }
 
 // Init initializes the main menu
@@ -105,16 +117,21 @@ func (m *MainMenuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// View renders the main menu with beautiful bordered styling
+// View renders the main menu with beautiful bordered styling (optimized)
 func (m *MainMenuModel) View() string {
 	if m.quitting {
 		return "Goodbye!\n"
 	}
 
-	c := m.choice
-	var b strings.Builder
+	// Reset the pre-allocated builder instead of creating new one
+	m.renderBuffer.Reset()
 
-	// Beautiful bordered header like the README
+	// Reset menu lines slice (keep capacity)
+	m.menuLines = m.menuLines[:0]
+
+	c := m.choice
+
+	// Beautiful bordered header like the README (cached style)
 	headerBox := lipgloss.NewStyle().
 		Border(lipgloss.DoubleBorder()).
 		BorderForeground(lipgloss.Color("#0EA5E9")).
@@ -123,57 +140,53 @@ func (m *MainMenuModel) View() string {
 		Width(62).
 		Render("🎯 Flutter Package Manager")
 
-	b.WriteString(headerBox + "\n\n")
+	// Build content using pre-allocated slice
+	m.menuLines = append(m.menuLines, headerBox)
+	m.menuLines = append(m.menuLines, "")
+	m.menuLines = append(m.menuLines, "📱 Flutter Package Manager - Main Menu:")
 
-	// Main menu title with emoji
-	b.WriteString("📱 Flutter Package Manager - Main Menu:\n")
+	// Pre-compute emoji array to avoid switch in hot path
+	emojis := [4]string{"📁", "🐙", "⚙️", "🔄"}
 
-	// Menu options with proper numbering and styling
+	// Menu options with optimized string building
 	for i, option := range menuOptions {
-		var prefix string
+		var line string
 		if c == i {
-			prefix = "► " + strconv.Itoa(i+1) + ". "
-		} else {
-			prefix = "  " + strconv.Itoa(i+1) + ". "
-		}
-
-		// Add emoji based on option
-		var emoji string
-		switch i {
-		case 0:
-			emoji = "📁"
-		case 1:
-			emoji = "🐙"
-		case 2:
-			emoji = "⚙️"
-		case 3:
-			emoji = "🔄"
-		}
-
-		line := prefix + emoji + " " + option.title
-		if c == i {
+			line = "► " + strconv.Itoa(i+1) + ". " + emojis[i] + " " + option.title
 			line = m.checkboxStyle.Render(line)
+		} else {
+			line = "  " + strconv.Itoa(i+1) + ". " + emojis[i] + " " + option.title
 		}
-		b.WriteString(line + "\n")
+		m.menuLines = append(m.menuLines, line)
 	}
 
-	b.WriteString("\n")
+	m.menuLines = append(m.menuLines, "")
 
 	// Detected project info (placeholder for now)
 	if m.shared.LocalPubspecAvailable {
 		detectedText := "💡 Detected Flutter project: " + m.shared.DetectedProject
-		b.WriteString(m.subtleStyle.Render(detectedText) + "\n\n")
+		m.menuLines = append(m.menuLines, m.subtleStyle.Render(detectedText))
+		m.menuLines = append(m.menuLines, "")
 	}
 
-	// Timeout info
-	timeoutText := "Program quits in " + m.ticksStyle.Render(strconv.Itoa(m.menuTimeout)) + " seconds\n\n"
-	b.WriteString(timeoutText)
+	// Timeout info with pre-computed string
+	timeoutText := "Program quits in " + m.ticksStyle.Render(strconv.Itoa(m.menuTimeout)) + " seconds"
+	m.menuLines = append(m.menuLines, timeoutText)
+	m.menuLines = append(m.menuLines, "")
 
 	// Help text in beautiful style
 	helpText := "↑/↓ navigate • enter/1-4 select • q quit"
-	b.WriteString(m.subtleStyle.Render(helpText))
+	m.menuLines = append(m.menuLines, m.subtleStyle.Render(helpText))
 
-	return b.String()
+	// Join all lines efficiently using pre-allocated builder
+	for i, line := range m.menuLines {
+		if i > 0 {
+			m.renderBuffer.WriteByte('\n')
+		}
+		m.renderBuffer.WriteString(line)
+	}
+
+	return m.renderBuffer.String()
 }
 
 // handleKeys handles keyboard input
