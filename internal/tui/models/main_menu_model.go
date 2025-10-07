@@ -9,6 +9,7 @@ package models
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -104,29 +105,75 @@ func (m *MainMenuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// View renders the main menu
+// View renders the main menu with beautiful bordered styling
 func (m *MainMenuModel) View() string {
 	if m.quitting {
 		return "Goodbye!\n"
 	}
 
 	c := m.choice
+	var b strings.Builder
 
-	tpl := m.headerStyle.Render("📱 Flutter Package Manager") + "\n\n"
-	tpl += "What to do today?\n\n"
-	tpl += "%s\n\n"
-	tpl += "Program quits in %s seconds\n\n"
-	tpl += m.subtleStyle.Render("j/k, up/down: select") + " • " +
-		m.subtleStyle.Render("enter: choose") + " • " +
-		m.subtleStyle.Render("1-4: direct select") + " • " +
-		m.subtleStyle.Render("q, esc: quit")
+	// Beautiful bordered header like the README
+	headerBox := lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(lipgloss.Color("#0EA5E9")).
+		Padding(1, 2).
+		Align(lipgloss.Center).
+		Width(62).
+		Render("🎯 Flutter Package Manager")
 
-	choices := ""
+	b.WriteString(headerBox + "\n\n")
+
+	// Main menu title with emoji
+	b.WriteString("📱 Flutter Package Manager - Main Menu:\n")
+
+	// Menu options with proper numbering and styling
 	for i, option := range menuOptions {
-		choices += m.checkbox(option.title, c == i) + "\n"
+		var prefix string
+		if c == i {
+			prefix = "► " + strconv.Itoa(i+1) + ". "
+		} else {
+			prefix = "  " + strconv.Itoa(i+1) + ". "
+		}
+
+		// Add emoji based on option
+		var emoji string
+		switch i {
+		case 0:
+			emoji = "📁"
+		case 1:
+			emoji = "🐙"
+		case 2:
+			emoji = "⚙️"
+		case 3:
+			emoji = "🔄"
+		}
+
+		line := prefix + emoji + " " + option.title
+		if c == i {
+			line = m.checkboxStyle.Render(line)
+		}
+		b.WriteString(line + "\n")
 	}
 
-	return fmt.Sprintf(tpl, choices, m.ticksStyle.Render(strconv.Itoa(m.menuTimeout)))
+	b.WriteString("\n")
+
+	// Detected project info (placeholder for now)
+	if m.shared.LocalPubspecAvailable {
+		detectedText := "💡 Detected Flutter project: " + m.shared.DetectedProject
+		b.WriteString(m.subtleStyle.Render(detectedText) + "\n\n")
+	}
+
+	// Timeout info
+	timeoutText := "Program quits in " + m.ticksStyle.Render(strconv.Itoa(m.menuTimeout)) + " seconds\n\n"
+	b.WriteString(timeoutText)
+
+	// Help text in beautiful style
+	helpText := "↑/↓ navigate • enter/1-4 select • q quit"
+	b.WriteString(m.subtleStyle.Render(helpText))
+
+	return b.String()
 }
 
 // handleKeys handles keyboard input

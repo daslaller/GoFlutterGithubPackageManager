@@ -55,9 +55,11 @@ type AppModel struct {
 // AppState holds data that needs to be shared between screens
 type AppState struct {
 	// Project information
-	SelectedProject     *core.Project
-	DetectedPubspecPath string
-	HasGitDeps          bool
+	SelectedProject       *core.Project
+	DetectedPubspecPath   string
+	DetectedProject       string
+	LocalPubspecAvailable bool
+	HasGitDeps            bool
 
 	// Repository data
 	AvailableRepos []core.RepoCandidate

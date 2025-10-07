@@ -7,7 +7,7 @@ package models
 
 import (
 	"fmt"
-	"io"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -46,19 +46,17 @@ type RepoItem struct {
 }
 
 func (i RepoItem) Title() string {
-	privacy := "🔓"
-	if i.repo.Privacy == "private" {
-		privacy = "🔒"
-	}
-	return fmt.Sprintf("%s %s/%s", privacy, i.repo.Owner, i.repo.Name)
+	// Simple clean format like list-simple
+	return fmt.Sprintf("%s/%s", i.repo.Owner, i.repo.Name)
 }
 
 func (i RepoItem) Description() string {
+	// Minimal description for list-simple style
 	if i.repo.Desc == "" {
-		return "No description"
+		return ""
 	}
-	if len(i.repo.Desc) > 60 {
-		return i.repo.Desc[:57] + "..."
+	if len(i.repo.Desc) > 50 {
+		return i.repo.Desc[:47] + "..."
 	}
 	return i.repo.Desc
 }
@@ -75,12 +73,12 @@ type reposLoadedMsg struct {
 
 // NewRepoSelectionModel creates a new repository selection model
 func NewRepoSelectionModel(cfg core.Config, logger *core.Logger, shared *AppState) *RepoSelectionModel {
-	// Create list with default delegate (will be updated after model creation)
+	// Create simple list without title or status bar (list-simple style)
 	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 80, 20)
-	l.Title = "📋 GitHub Repositories - Select packages to add"
 	l.SetShowStatusBar(false)
-	l.SetFilteringEnabled(true)
+	l.SetFilteringEnabled(false)
 	l.SetShowHelp(false)
+	l.SetShowTitle(false)
 
 	// Create spinner
 	s := spinner.New()
@@ -175,7 +173,7 @@ func (m *RepoSelectionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// View renders the repository selection screen
+// View renders the repository selection screen with overflow indicators
 func (m *RepoSelectionModel) View() string {
 	if m.quitting {
 		return ""
@@ -189,18 +187,69 @@ func (m *RepoSelectionModel) View() string {
 		return "\nPreparing repository list...\n\n"
 	}
 
-	header := m.headerStyle.Render(fmt.Sprintf("🎯 Found %d repositories", len(m.shared.AvailableRepos)))
+	var b strings.Builder
 
-	content := m.list.View()
+	// Beautiful bordered header matching main menu style
+	headerBox := lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(lipgloss.Color("#0EA5E9")).
+		Padding(1, 2).
+		Align(lipgloss.Center).
+		Width(62).
+		Render(fmt.Sprintf("🎯 Found %d repositories", len(m.shared.AvailableRepos)))
 
-	footer := ""
-	if len(m.selectedRepos) > 0 {
-		footer = m.selectedStyle.Render(fmt.Sprintf("✨ %d repositories selected", len(m.selectedRepos)))
-		footer += "\n"
+	b.WriteString(headerBox + "\n\n")
+
+	// Calculate overflow indicators using list's internal pagination
+	totalItems := len(m.shared.AvailableRepos)
+	if totalItems > 0 {
+		visibleItems := m.list.Paginator.ItemsOnPage(totalItems)
+		currentPage := m.list.Paginator.Page
+		itemsPerPage := m.list.Paginator.PerPage
+
+		startIndex := currentPage * itemsPerPage
+		endIndex := startIndex + visibleItems
+
+		// Show overflow indicator at top
+		if startIndex > 0 {
+			overflowText := fmt.Sprintf("▲ %d more above", startIndex)
+			b.WriteString(m.selectedStyle.Render(overflowText) + "\n")
+		}
+
+		// Main list content
+		b.WriteString(m.list.View())
+
+		// Show overflow indicator at bottom
+		if endIndex < totalItems {
+			overflowText := fmt.Sprintf("▼ %d more below", totalItems-endIndex)
+			b.WriteString("\n" + m.selectedStyle.Render(overflowText))
+		}
+	} else {
+		b.WriteString(m.list.View())
 	}
-	footer += "space: toggle • enter: confirm • q: back to menu"
 
-	return header + "\n\n" + content + "\n\n" + footer
+	// Footer with selection info (list-simple style)
+	b.WriteString("\n\n")
+	if len(m.selectedRepos) > 0 {
+		// Show selected items in a simple list-simple style
+		selectedNames := []string{}
+		for _, idx := range m.selectedRepos {
+			if idx < len(m.shared.AvailableRepos) {
+				repo := m.shared.AvailableRepos[idx]
+				selectedNames = append(selectedNames, repo.Owner+"/"+repo.Name)
+			}
+		}
+		if len(selectedNames) > 0 {
+			selectionText := fmt.Sprintf("Selected: %s", strings.Join(selectedNames, ", "))
+			if len(selectionText) > 60 {
+				selectionText = fmt.Sprintf("Selected %d repositories", len(m.selectedRepos))
+			}
+			b.WriteString(m.selectedStyle.Render(selectionText) + "\n")
+		}
+	}
+	b.WriteString("space: toggle • enter: confirm • q: back to menu")
+
+	return b.String()
 }
 
 // handleKeys handles keyboard input
@@ -246,10 +295,7 @@ func (m *RepoSelectionModel) setupList() {
 		}
 	}
 	m.list.SetItems(items)
-
-	// Set up the beautiful custom delegate with checkmarks
-	delegate := NewRepoSelectionDelegate(m)
-	m.list.SetDelegate(delegate)
+	// Use default delegate for clean list-simple style
 }
 
 // toggleSelection toggles the selection state of a repository
@@ -289,74 +335,4 @@ func (m *RepoSelectionModel) isSelected(index int) bool {
 	return false
 }
 
-// RepoSelectionDelegate handles rendering with selection checkmarks (restored original styling)
-type RepoSelectionDelegate struct {
-	list.DefaultDelegate
-	view *RepoSelectionModel
-}
-
-// NewRepoSelectionDelegate creates a delegate for repository selection with original styling
-func NewRepoSelectionDelegate(view *RepoSelectionModel) *RepoSelectionDelegate {
-	d := list.NewDefaultDelegate()
-
-	d.Styles.SelectedTitle = view.selectedStyle
-	d.Styles.SelectedDesc = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#E5E7EB")).
-		Background(lipgloss.Color("#8B5CF6"))
-	d.Styles.NormalTitle = view.normalStyle
-	d.Styles.NormalDesc = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#6B7280"))
-
-	return &RepoSelectionDelegate{
-		DefaultDelegate: d,
-		view:            view,
-	}
-}
-
-// Render implements custom rendering for repository items with selection checkmarks (original logic)
-func (d RepoSelectionDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
-	if repoItem, ok := item.(RepoItem); ok {
-		// Check if this item is selected
-		isSelected := d.view.isSelected(index)
-
-		// Create prefix
-		var prefix string
-		if isSelected {
-			prefix = "✅ "
-		} else {
-			prefix = "   "
-		}
-
-		// Build title and description
-		title := prefix + repoItem.Title()
-		desc := repoItem.Description()
-
-		// Apply styles
-		var titleStyle, descStyle lipgloss.Style
-		if isSelected {
-			titleStyle = d.view.selectedStyle
-			descStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#FFFFFF")).
-				Background(lipgloss.Color("#10B981"))
-		} else {
-			titleStyle = d.DefaultDelegate.Styles.NormalTitle
-			descStyle = d.DefaultDelegate.Styles.NormalDesc
-		}
-
-		// Use a reasonable width for rendering (list items)
-		width := 70 // Standard terminal width minus margins
-
-		// Render with proper width constraints
-		renderedTitle := titleStyle.Width(width).Render(title)
-		renderedDesc := descStyle.Width(width).Render(desc)
-
-		_, err := fmt.Fprint(w, renderedTitle+"\n"+renderedDesc)
-		if err != nil {
-			return
-		}
-		return
-	}
-
-	// Fallback to default rendering
-	d.DefaultDelegate.Render(w, m, index, item)
-}
+// Simple list-simple style - no custom delegate needed
