@@ -7,6 +7,7 @@ package models
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -235,7 +236,7 @@ func (m *RepoSelectionModel) loadRepositories() tea.Cmd {
 	}
 }
 
-// setupList configures the list with repository items
+// setupList configures the list with repository items and custom delegate
 func (m *RepoSelectionModel) setupList() {
 	items := make([]list.Item, len(m.shared.AvailableRepos))
 	for i, repo := range m.shared.AvailableRepos {
@@ -245,6 +246,10 @@ func (m *RepoSelectionModel) setupList() {
 		}
 	}
 	m.list.SetItems(items)
+
+	// Set up the beautiful custom delegate with checkmarks
+	delegate := NewRepoSelectionDelegate(m)
+	m.list.SetDelegate(delegate)
 }
 
 // toggleSelection toggles the selection state of a repository

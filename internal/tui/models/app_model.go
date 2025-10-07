@@ -100,7 +100,6 @@ func (m *AppModel) Init() tea.Cmd {
 
 // Update handles messages and coordinates between screens
 func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -123,8 +122,6 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Pass message to current screen
 		return m.updateCurrentScreen(msg)
 	}
-
-	return m, tea.Batch(cmds...)
 }
 
 // View renders the current screen

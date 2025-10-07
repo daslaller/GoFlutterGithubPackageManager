@@ -19,7 +19,8 @@
       "Bash(grep:*)",
       "Bash(./flutter-pm.exe autotest)",
       "Bash(pkill:*)",
-      "Bash(./flutter-pm.exe autotest --help)"
+      "Bash(./flutter-pm.exe autotest --help)",
+      "Bash(go vet:*)"
     ],
     "defaultMode": "acceptEdits"
   }
