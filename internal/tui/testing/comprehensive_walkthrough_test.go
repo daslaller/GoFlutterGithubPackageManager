@@ -31,33 +31,31 @@ func TestCompleteMenuWalkthrough(t *testing.T) {
 	}{
 		{
 			option:        "1",
-			expectedTitle: "prerequisites",
+			expectedTitle: "🔍 Scanning for Flutter Projects...",
 			expectedContent: []string{
-				"prerequisites",
-				"Check",
-				"tools",
+				"Scanning for Flutter Projects",
+				"Please wait while we scan common directories",
 			},
 			forbiddenContent: []string{
-				"🔍 Configure Repository Search",
+				"Fetching GitHub repositories",
+				"⚙️ Configure Directory Search",
 				"Package Configuration",
-				"Owner/Organization Filter",
 			},
-			description: "Option 1: Check prerequisites",
+			description: "Option 1: Check prerequisites (placeholder scanning screen)",
 		},
 		{
 			option:        "2",
-			expectedTitle: "directories",
+			expectedTitle: "Fetching GitHub repositories",
 			expectedContent: []string{
-				"scan",
-				"directories",
-				"Flutter",
+				"Fetching GitHub repositories",
+				"available packages",
 			},
 			forbiddenContent: []string{
-				"🔍 Configure Repository Search",
+				"Scanning for Flutter Projects",
+				"⚙️ Configure Directory Search",
 				"Package Configuration",
-				"Owner/Organization Filter",
 			},
-			description: "Option 2: Scan directories",
+			description: "Option 2: GitHub repo loading",
 		},
 		{
 			option:        "3",
@@ -74,24 +72,24 @@ func TestCompleteMenuWalkthrough(t *testing.T) {
 				"Package Configuration",
 				"selected packages",
 				"All Packages Configured",
-				"🔍 Configure Repository Search",
-				"Owner/Organization Filter",
+				"Fetching GitHub repositories",
+				"Scanning for Flutter Projects",
 			},
 			description: "Option 3: Configure search (CRITICAL TEST)",
 		},
 		{
 			option:        "4",
-			expectedTitle: "GitHub",
+			expectedTitle: "🔍 Scanning for Flutter Projects...",
 			expectedContent: []string{
-				"GitHub",
-				"repo",
+				"Scanning for Flutter Projects",
+				"Please wait while we scan common directories",
 			},
 			forbiddenContent: []string{
-				"🔍 Configure Repository Search",
+				"Fetching GitHub repositories",
+				"⚙️ Configure Directory Search",
 				"Package Configuration",
-				"Owner/Organization Filter",
 			},
-			description: "Option 4: GitHub repo",
+			description: "Option 4: Update local package (scan directories placeholder)",
 		},
 	}
 
@@ -268,7 +266,7 @@ func TestActualTerminalFrames(t *testing.T) {
 
 	// Validate critical option 3 frame
 	option3Frame := frames["3"]
-	if !strings.Contains(option3Frame, "🔍 Configure Repository Search") {
+	if !strings.Contains(option3Frame, "⚙️ Configure Directory Search") {
 		t.Errorf("CRITICAL: Option 3 frame does not contain search configuration content!")
 		t.Errorf("Frame content:\n%s", option3Frame)
 	} else {

@@ -1,3 +1,4 @@
-🔄 Loading GitHub repositories...
 
-This will transition to repository selection.
+⣾  Fetching GitHub repositories...
+
+Please wait while we gather available packages.

@@ -174,6 +174,18 @@ func NewRepoSelectionModel(cfg core.Config, logger *core.Logger, shared *AppStat
 
 // Init initializes the repository selection screen
 func (m *RepoSelectionModel) Init() tea.Cmd {
+	// Reset selection state each time the screen starts
+	m.delegate.selectedItems = make(map[int]bool)
+
+	if len(m.shared.AvailableDependencies) > 0 {
+		m.loading = false
+		m.ready = true
+		m.setupList()
+		return nil
+	}
+
+	m.loading = true
+	m.ready = false
 	return tea.Batch(
 		m.spinner.Tick,
 		m.loadRepositories(),
@@ -365,6 +377,21 @@ func (m *RepoSelectionModel) setupList() {
 		}
 	}
 	m.list.SetItems(items)
+	// Restore selection markers from shared state when returning to the screen
+	if len(m.shared.SelectedDependencies) > 0 {
+		selected := make(map[string]struct{}, len(m.shared.SelectedDependencies))
+		for _, repo := range m.shared.SelectedDependencies {
+			key := repo.Owner + "/" + repo.Name + "|" + repo.URL
+			selected[key] = struct{}{}
+		}
+
+		for i, repo := range m.shared.AvailableDependencies {
+			key := repo.Owner + "/" + repo.Name + "|" + repo.URL
+			if _, ok := selected[key]; ok {
+				m.delegate.selectedItems[i] = true
+			}
+		}
+	}
 	// Use default delegate for clean list-simple style with > indicator
 }
 
