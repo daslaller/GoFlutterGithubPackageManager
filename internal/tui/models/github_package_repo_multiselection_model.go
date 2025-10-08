@@ -77,14 +77,15 @@ func newSimpleMultiSelectDelegate() *simpleMultiSelectDelegate {
 	return &simpleMultiSelectDelegate{
 		selectedItems: make(map[int]bool),
 		cursorStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#0EA5E9")).
+			Foreground(lipgloss.Color("#F59E0B")). // Vibrant amber/orange
 			Bold(true),
 		selectedStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FFFFFF")).
-			Background(lipgloss.Color("#10B981")).
-			Bold(true),
+			Background(lipgloss.Color("#8B5CF6")). // Beautiful purple
+			Bold(true).
+			Padding(0, 1),
 		normalStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#374151")),
+			Foreground(lipgloss.Color("#6B7280")), // Lighter gray
 	}
 }
 
@@ -93,20 +94,30 @@ func (d *simpleMultiSelectDelegate) Spacing() int                              {
 func (d *simpleMultiSelectDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
 func (d *simpleMultiSelectDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
 	if item, ok := listItem.(RepoItem); ok {
-		cursor := "  "
+		var cursor string
 		if index == m.Index() {
-			cursor = "> " // Simple > marker like list-simple
+			cursor = d.cursorStyle.Render("▶ ") // Beautiful arrow instead of >
+		} else {
+			cursor = "  "
 		}
 
 		itemText := item.Title()
 		if d.selectedItems[index] {
-			// Highlighted selected item
-			itemText = d.selectedStyle.Render("✓ " + itemText)
+			// Highlighted selected item with glowing effect
+			itemText = d.selectedStyle.Render(" ✓ " + itemText + " ")
 		} else {
-			itemText = d.normalStyle.Render(itemText)
+			if index == m.Index() {
+				// Highlight current item even if not selected
+				highlightStyle := lipgloss.NewStyle().
+					Foreground(lipgloss.Color("#10B981")). // Green for hover
+					Bold(true)
+				itemText = highlightStyle.Render(itemText)
+			} else {
+				itemText = d.normalStyle.Render(itemText)
+			}
 		}
 
-		line := d.cursorStyle.Render(cursor) + itemText
+		line := cursor + itemText
 		fmt.Fprint(w, line)
 	}
 }
@@ -270,23 +281,28 @@ func (m *RepoSelectionModel) View() string {
 	// Check if we're in SOURCE mode
 	isSourceMode := len(m.shared.AvailableSourceRepos) > 0
 
-	// Beautiful bordered header matching main menu style
+	// Beautiful bordered header with gradient-like colors
 	var headerText string
 	var itemCount int
+	var headerColor string
 	if isSourceMode {
 		headerText = "📁 Select Source Flutter Project"
 		itemCount = len(m.shared.AvailableSourceRepos)
+		headerColor = "#F59E0B" // Warm amber for source
 	} else {
 		headerText = "📦 Add Dependencies"
 		itemCount = len(m.shared.AvailableDependencies)
+		headerColor = "#8B5CF6" // Cool purple for packages
 	}
 
 	headerBox := lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
-		BorderForeground(lipgloss.Color("#0EA5E9")).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(headerColor)).
+		Foreground(lipgloss.Color(headerColor)).
 		Padding(1, 2).
 		Align(lipgloss.Center).
 		Width(62).
+		Bold(true).
 		Render(fmt.Sprintf("%s (%d available)", headerText, itemCount))
 
 	b.WriteString(headerBox + "\n\n")
@@ -301,29 +317,35 @@ func (m *RepoSelectionModel) View() string {
 		startIndex := currentPage * itemsPerPage
 		endIndex := startIndex + visibleItems
 
-		// Show overflow indicator at top
+		// Show overflow indicator at top with gradient
 		if startIndex > 0 {
-			overflowText := fmt.Sprintf("▲ %d more above", startIndex)
-			b.WriteString(m.overflowStyle.Render(overflowText) + "\n")
+			overflowStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#06B6D4")). // Cyan
+				Bold(true)
+			overflowText := fmt.Sprintf("▲ %d more above ▲", startIndex)
+			b.WriteString(overflowStyle.Render(overflowText) + "\n")
 		}
 
-		// Beautiful native list rendering (single-select style)
+		// Beautiful native list rendering
 		b.WriteString(m.list.View())
 
-		// Show overflow indicator at bottom
+		// Show overflow indicator at bottom with gradient
 		if endIndex < totalItems {
-			overflowText := fmt.Sprintf("▼ %d more below", totalItems-endIndex)
-			b.WriteString("\n" + m.overflowStyle.Render(overflowText))
+			overflowStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#06B6D4")). // Cyan
+				Bold(true)
+			overflowText := fmt.Sprintf("▼ %d more below ▼", totalItems-endIndex)
+			b.WriteString("\n" + overflowStyle.Render(overflowText))
 		}
 	} else {
 		b.WriteString(m.list.View())
 	}
 
-	// Footer with selection info (list-simple style)
+	// Footer with selection info
 	b.WriteString("\n\n")
 	selectedIndices := m.delegate.getSelectedIndices()
-	if len(selectedIndices) > 0 {
-		// Show selected items in a simple list-simple style
+	if len(selectedIndices) > 0 && !isSourceMode {
+		// Show selected packages with beautiful styling
 		selectedNames := []string{}
 		for _, idx := range selectedIndices {
 			if idx < len(m.shared.AvailableDependencies) {
@@ -332,19 +354,37 @@ func (m *RepoSelectionModel) View() string {
 			}
 		}
 		if len(selectedNames) > 0 {
+			selectionCountStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#10B981")).
+				Bold(true)
+
 			selectionText := fmt.Sprintf("Selected: %s", strings.Join(selectedNames, ", "))
 			if len(selectionText) > 60 {
-				selectionText = fmt.Sprintf("Selected %d repositories", len(selectedIndices))
+				selectionText = selectionCountStyle.Render(fmt.Sprintf("✓ %d packages selected", len(selectedIndices)))
+			} else {
+				selectionText = selectionCountStyle.Render("✓ " + selectionText)
 			}
-			b.WriteString(m.delegate.selectedStyle.Render(selectionText) + "\n")
+			b.WriteString(selectionText + "\n")
 		}
 	}
 
-	// Footer instructions
-	if len(selectedIndices) > 0 {
-		b.WriteString("space: toggle • enter: confirm selection • q: back to menu")
+	// Footer instructions with colors
+	helpStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#94A3B8")).
+		Italic(true)
+
+	keyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#F59E0B")).
+		Bold(true)
+
+	if isSourceMode {
+		b.WriteString(helpStyle.Render(keyStyle.Render("enter") + ": select project • " + keyStyle.Render("q") + ": back to menu"))
 	} else {
-		b.WriteString("space: toggle packages • select at least 1 to continue • q: back to menu")
+		if len(selectedIndices) > 0 {
+			b.WriteString(helpStyle.Render(keyStyle.Render("space") + ": toggle • " + keyStyle.Render("enter") + ": confirm selection • " + keyStyle.Render("q") + ": back"))
+		} else {
+			b.WriteString(helpStyle.Render(keyStyle.Render("space") + ": toggle packages • select at least 1 to continue • " + keyStyle.Render("q") + ": back"))
+		}
 	}
 
 	return b.String()
