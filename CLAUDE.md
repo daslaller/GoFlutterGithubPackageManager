@@ -100,15 +100,27 @@ This Go implementation maintains full functional parity with the shell scripts:
 - **Recommendations**: Smart suggestions for pinning refs, SSH URLs, etc.
 
 ### Key Workflow
+
+#### Main Menu Flow
 1. **Main Menu**: Choose operation (prerequisites, GitHub repo, configure search, update local package, self-update)
-2. **Source Selection**: Select Flutter project to work on (from GitHub)
-3. **Source Configuration**: Configure download location and project name (with file picker)
-4. **Source Download**: Clone/download the selected Flutter project
-5. **Dependency Selection**: Multi-select packages to add as dependencies (uses list-simple with > markers)
-6. **Package Configuration**: Configure selected packages (branches, names, subdirectories)
-7. **Confirmation**: Review all changes before execution
-8. **Execution**: Execute pub add commands with backup creation
-9. **Results**: Show results, errors, and smart recommendations
+
+#### GitHub Repo Flow (Option 2)
+2. **GitHub Loading**: Fetch available packages from GitHub using `gh` CLI
+3. **Package Multiselect**: Multi-select packages to add as dependencies (uses list-simple with > markers and checkmarks)
+4. **Package Configuration**: Configure selected packages (branches, names, subdirectories)
+5. **Confirmation**: Review all changes before execution
+6. **Execution**: Execute pub add commands with backup creation
+7. **Results**: Show results, errors, and smart recommendations
+
+#### Configure Search Flow (Option 3)
+2. **Search Configuration**: Configure directory search paths, depth, and full disk search toggle
+3. **Return to Main Menu**: Save settings and return
+
+#### Update Local Package Flow (Option 4)
+2. **Scan Directories**: Scan for Flutter projects in configured directories
+3. **Project Selection**: Select which project to update
+4. **Update Execution**: Run updates on stale dependencies
+5. **Results**: Show results and recommendations
 
 ## Dependencies and Prerequisites
 
@@ -161,17 +173,14 @@ go test -cover ./...
 go test -v ./internal/tui/testing
 
 # Test specific functionality
-go test -v ./internal/tui/testing -run TestConfigureSearchOption
 go test -v ./internal/tui/testing -run TestCompleteMenuWalkthrough
+go test -v ./internal/tui/testing -run TestGitHubRepoToMultiselect
 
 # Generate terminal output frames for analysis
 go test -v ./internal/tui/testing -run TestActualTerminalFrames
 
 # Run terminal test script (generates detailed reports)
 go run scripts/run_terminal_tests.go
-
-# Run comprehensive menu walkthrough (critical validation)
-go test -v ./internal/tui/testing -run TestComprehensiveMenuWalkthrough
 ```
 
 ### Testing Framework Features
