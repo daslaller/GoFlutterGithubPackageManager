@@ -1,7 +1,7 @@
 // Package models/repo_selection_model.go - Repository Selection Screen Model
 //
 // This file implements the repository selection screen where users can
-// browse and multi-select GitHub repositories to add as dependencies.
+// browse GitHub repositories and choose a single source to add as a dependency.
 
 package models
 
@@ -25,7 +25,7 @@ type RepoSelectionModel struct {
 
 	// UI components with custom delegate
 	list     list.Model
-	delegate *simpleMultiSelectDelegate
+	delegate *simpleSingleSelectDelegate
 	spinner  spinner.Model
 
 	// State
@@ -65,17 +65,17 @@ func (i RepoItem) FilterValue() string {
 	return fmt.Sprintf("%s/%s %s", i.repo.Owner, i.repo.Name, i.repo.Desc)
 }
 
-// simpleMultiSelectDelegate is a custom delegate for list-simple style with > markers
-type simpleMultiSelectDelegate struct {
-	selectedItems map[int]bool
+// simpleSingleSelectDelegate is a custom delegate for list-simple style with > markers
+type simpleSingleSelectDelegate struct {
+	selectedIndex int
 	cursorStyle   lipgloss.Style
 	selectedStyle lipgloss.Style
 	normalStyle   lipgloss.Style
 }
 
-func newSimpleMultiSelectDelegate() *simpleMultiSelectDelegate {
-	return &simpleMultiSelectDelegate{
-		selectedItems: make(map[int]bool),
+func newSimpleSingleSelectDelegate() *simpleSingleSelectDelegate {
+	return &simpleSingleSelectDelegate{
+		selectedIndex: -1,
 		cursorStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#0EA5E9")).
 			Bold(true),
@@ -88,10 +88,10 @@ func newSimpleMultiSelectDelegate() *simpleMultiSelectDelegate {
 	}
 }
 
-func (d *simpleMultiSelectDelegate) Height() int                               { return 1 }
-func (d *simpleMultiSelectDelegate) Spacing() int                              { return 0 }
-func (d *simpleMultiSelectDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
-func (d *simpleMultiSelectDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+func (d *simpleSingleSelectDelegate) Height() int                               { return 1 }
+func (d *simpleSingleSelectDelegate) Spacing() int                              { return 0 }
+func (d *simpleSingleSelectDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
+func (d *simpleSingleSelectDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
 	if item, ok := listItem.(RepoItem); ok {
 		cursor := "  "
 		if index == m.Index() {
@@ -99,7 +99,7 @@ func (d *simpleMultiSelectDelegate) Render(w io.Writer, m list.Model, index int,
 		}
 
 		itemText := item.Title()
-		if d.selectedItems[index] {
+		if index == d.selectedIndex {
 			// Highlighted selected item
 			itemText = d.selectedStyle.Render("✓ " + itemText)
 		} else {
@@ -111,22 +111,26 @@ func (d *simpleMultiSelectDelegate) Render(w io.Writer, m list.Model, index int,
 	}
 }
 
-// toggleSelection toggles the selection state of an item
-func (d *simpleMultiSelectDelegate) toggleSelection(index int) {
-	if d.selectedItems[index] {
-		delete(d.selectedItems, index)
-	} else {
-		d.selectedItems[index] = true
+// setSelected updates the selected index
+func (d *simpleSingleSelectDelegate) setSelected(index int) {
+	if index < 0 {
+		d.selectedIndex = -1
+		return
 	}
+	d.selectedIndex = index
 }
 
-// getSelectedIndices returns a slice of selected indices
-func (d *simpleMultiSelectDelegate) getSelectedIndices() []int {
-	var indices []int
-	for idx := range d.selectedItems {
-		indices = append(indices, idx)
+// clearSelection clears any selected index
+func (d *simpleSingleSelectDelegate) clearSelection() {
+	d.selectedIndex = -1
+}
+
+// getSelectedIndex returns the selected index if one exists
+func (d *simpleSingleSelectDelegate) getSelectedIndex() (int, bool) {
+	if d.selectedIndex >= 0 {
+		return d.selectedIndex, true
 	}
-	return indices
+	return 0, false
 }
 
 // reposLoadedMsg is sent when repositories are loaded
@@ -138,7 +142,7 @@ type reposLoadedMsg struct {
 // NewRepoSelectionModel creates a new repository selection model using list-simple style
 func NewRepoSelectionModel(cfg core.Config, logger *core.Logger, shared *AppState) *RepoSelectionModel {
 	// Create custom delegate for list-simple style with > markers and highlights
-	delegate := newSimpleMultiSelectDelegate()
+	delegate := newSimpleSingleSelectDelegate()
 
 	// Create list with custom delegate
 	l := list.New([]list.Item{}, delegate, 80, 20)
@@ -174,6 +178,18 @@ func NewRepoSelectionModel(cfg core.Config, logger *core.Logger, shared *AppStat
 
 // Init initializes the repository selection screen
 func (m *RepoSelectionModel) Init() tea.Cmd {
+	// Reset selection state each time the screen starts
+	m.delegate.clearSelection()
+
+	if len(m.shared.AvailableDependencies) > 0 {
+		m.loading = false
+		m.ready = true
+		m.setupList()
+		return nil
+	}
+
+	m.loading = true
+	m.ready = false
 	return tea.Batch(
 		m.spinner.Tick,
 		m.loadRepositories(),
@@ -286,31 +302,22 @@ func (m *RepoSelectionModel) View() string {
 
 	// Footer with selection info (list-simple style)
 	b.WriteString("\n\n")
-	selectedIndices := m.delegate.getSelectedIndices()
-	if len(selectedIndices) > 0 {
-		// Show selected items in a simple list-simple style
-		selectedNames := []string{}
-		for _, idx := range selectedIndices {
-			if idx < len(m.shared.AvailableDependencies) {
-				repo := m.shared.AvailableDependencies[idx]
-				selectedNames = append(selectedNames, repo.Owner+"/"+repo.Name)
+	if selectedIndex, ok := m.delegate.getSelectedIndex(); ok {
+		if selectedIndex >= 0 && selectedIndex < len(m.shared.AvailableDependencies) {
+			repo := m.shared.AvailableDependencies[selectedIndex]
+			selectionText := fmt.Sprintf("Selected: %s/%s", repo.Owner, repo.Name)
+			if repo.Desc != "" {
+				selectionText += fmt.Sprintf(" — %s", repo.Desc)
 			}
-		}
-		if len(selectedNames) > 0 {
-			selectionText := fmt.Sprintf("Selected: %s", strings.Join(selectedNames, ", "))
-			if len(selectionText) > 60 {
-				selectionText = fmt.Sprintf("Selected %d repositories", len(selectedIndices))
+			if len(selectionText) > 80 {
+				selectionText = fmt.Sprintf("Selected: %s/%s", repo.Owner, repo.Name)
 			}
 			b.WriteString(m.delegate.selectedStyle.Render(selectionText) + "\n")
 		}
 	}
 
 	// Footer instructions
-	if len(selectedIndices) > 0 {
-		b.WriteString("space: toggle • enter: confirm selection • q: back to menu")
-	} else {
-		b.WriteString("space: toggle packages • select at least 1 to continue • q: back to menu")
-	}
+	b.WriteString("enter: add repository • space: mark selection • q: back to menu")
 
 	return b.String()
 }
@@ -321,23 +328,23 @@ func (m *RepoSelectionModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		return m, TransitionToScreen(ScreenMainMenu)
 
-	case " ":
-		// Multi-select - toggle selection using delegate
-		currentIndex := m.list.Index()
-		if currentIndex >= 0 && currentIndex < len(m.shared.AvailableDependencies) {
-			m.delegate.toggleSelection(currentIndex)
-		}
-		return m, nil
-
 	case "enter":
-		// Confirm multi-selection and move to configuration
-		selectedIndices := m.delegate.getSelectedIndices()
-		if len(selectedIndices) == 0 {
-			// Don't allow proceeding without selecting packages
+		// Confirm selection and move to configuration
+		currentIndex := m.list.Index()
+		if currentIndex < 0 || currentIndex >= len(m.shared.AvailableDependencies) {
 			return m, nil
 		}
+		m.delegate.setSelected(currentIndex)
 		m.finalizeSelection()
 		return m, TransitionToScreen(ScreenConfiguration)
+
+	case " ":
+		// Space marks the current selection without leaving the screen
+		currentIndex := m.list.Index()
+		if currentIndex >= 0 && currentIndex < len(m.shared.AvailableDependencies) {
+			m.delegate.setSelected(currentIndex)
+		}
+		return m, nil
 
 	default:
 		// Pass other keys to the list
@@ -365,28 +372,40 @@ func (m *RepoSelectionModel) setupList() {
 		}
 	}
 	m.list.SetItems(items)
+	// Restore selection marker from shared state when returning to the screen
+	if len(m.shared.SelectedDependencies) > 0 {
+		selectedRepo := m.shared.SelectedDependencies[0]
+		for i, repo := range m.shared.AvailableDependencies {
+			if repo.Owner == selectedRepo.Owner && repo.Name == selectedRepo.Name && repo.URL == selectedRepo.URL {
+				m.delegate.setSelected(i)
+				m.list.Select(i)
+				break
+			}
+		}
+	}
 	// Use default delegate for clean list-simple style with > indicator
 }
 
 // finalizeSelection saves the selected repositories to shared state
 func (m *RepoSelectionModel) finalizeSelection() {
-	selectedIndices := m.delegate.getSelectedIndices()
-	selectedRepos := make([]core.RepoCandidate, 0, len(selectedIndices))
-	for _, index := range selectedIndices {
+	if index, ok := m.delegate.getSelectedIndex(); ok {
 		if index >= 0 && index < len(m.shared.AvailableDependencies) {
-			selectedRepos = append(selectedRepos, m.shared.AvailableDependencies[index])
-		} else {
-			m.logger.Debug("repo_selection", fmt.Sprintf("Invalid repository index: %d", index))
+			repo := m.shared.AvailableDependencies[index]
+			m.shared.SelectedDependencies = []core.RepoCandidate{repo}
+			m.logger.Info("repo_selection", fmt.Sprintf("Selected repository %s/%s", repo.Owner, repo.Name))
+			return
 		}
+		m.logger.Debug("repo_selection", fmt.Sprintf("Invalid repository index: %d", index))
 	}
-	m.shared.SelectedDependencies = selectedRepos
 
-	m.logger.Info("repo_selection", fmt.Sprintf("Selected %d repositories", len(selectedRepos)))
+	// If selection is invalid or missing, clear shared selection
+	m.shared.SelectedDependencies = nil
 }
 
 // isSelected checks if a repository at the given index is selected
 func (m *RepoSelectionModel) isSelected(index int) bool {
-	return m.delegate.selectedItems[index]
+	selectedIndex, ok := m.delegate.getSelectedIndex()
+	return ok && selectedIndex == index
 }
 
 // Single-select mode - using native list rendering with beautiful styling

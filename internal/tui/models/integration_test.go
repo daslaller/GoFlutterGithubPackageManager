@@ -30,8 +30,8 @@ func TestRepoSelectionToConfiguration(t *testing.T) {
 	// Test repo selection
 	repoModel := NewRepoSelectionModel(cfg, logger, shared)
 
-	// Select a repository using the multiselect delegate
-	repoModel.delegate.toggleSelection(0)
+	// Select a repository using the single-select delegate
+	repoModel.delegate.setSelected(0)
 	repoModel.finalizeSelection()
 
 	// Verify selection worked
@@ -84,7 +84,7 @@ func TestEmptyRepoFlow(t *testing.T) {
 	repoModel := NewRepoSelectionModel(cfg, logger, shared)
 
 	// Try to select invalid index - should not crash
-	repoModel.delegate.toggleSelection(0)
+	repoModel.delegate.setSelected(0)
 	repoModel.finalizeSelection()
 
 	// Should still have no selected repos

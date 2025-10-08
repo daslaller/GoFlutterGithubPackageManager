@@ -22,7 +22,7 @@ func TestRepoSelectionSafety(t *testing.T) {
 	model := NewRepoSelectionModel(cfg, logger, shared)
 
 	// Test selection with empty repos list - should not crash
-	model.delegate.toggleSelection(0)
+	model.delegate.setSelected(0)
 	model.finalizeSelection()
 
 	// Should have no selected repos
@@ -31,7 +31,7 @@ func TestRepoSelectionSafety(t *testing.T) {
 	}
 
 	// Test selection with invalid index - should not crash
-	model.delegate.toggleSelection(-1)
+	model.delegate.setSelected(-1)
 	model.finalizeSelection()
 
 	// Should still have no selected repos
@@ -58,7 +58,7 @@ func TestRepoSelectionWithValidData(t *testing.T) {
 	model := NewRepoSelectionModel(cfg, logger, shared)
 
 	// Test valid selection
-	model.delegate.toggleSelection(0)
+	model.delegate.setSelected(0)
 	model.finalizeSelection()
 
 	// Should have exactly 1 selected repo
@@ -71,9 +71,8 @@ func TestRepoSelectionWithValidData(t *testing.T) {
 		t.Errorf("Expected repo1, got %s", shared.SelectedDependencies[0].Name)
 	}
 
-	// Test selecting different repo (toggle first one off, then second one on)
-	model.delegate.toggleSelection(0) // Turn off repo1
-	model.delegate.toggleSelection(1) // Turn on repo2
+	// Test selecting different repo
+	model.delegate.setSelected(1)
 	model.finalizeSelection()
 
 	// Should still have exactly 1 selected repo
