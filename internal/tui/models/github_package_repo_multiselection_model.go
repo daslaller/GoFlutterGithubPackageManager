@@ -174,6 +174,16 @@ func NewRepoSelectionModel(cfg core.Config, logger *core.Logger, shared *AppStat
 
 // Init initializes the repository selection screen
 func (m *RepoSelectionModel) Init() tea.Cmd {
+	// Check if this is SOURCE selection mode (AvailableSourceRepos populated)
+	if len(m.shared.AvailableSourceRepos) > 0 {
+		// SOURCE SELECTION MODE - single select, don't reset selections
+		m.loading = false
+		m.ready = true
+		m.setupListFromSource()
+		return nil
+	}
+
+	// PACKAGE SELECTION MODE - multiselect
 	// Reset selection state each time the screen starts
 	m.delegate.selectedItems = make(map[int]bool)
 
@@ -257,14 +267,27 @@ func (m *RepoSelectionModel) View() string {
 
 	var b strings.Builder
 
+	// Check if we're in SOURCE mode
+	isSourceMode := len(m.shared.AvailableSourceRepos) > 0
+
 	// Beautiful bordered header matching main menu style
+	var headerText string
+	var itemCount int
+	if isSourceMode {
+		headerText = "📁 Select Source Flutter Project"
+		itemCount = len(m.shared.AvailableSourceRepos)
+	} else {
+		headerText = "📦 Add Dependencies"
+		itemCount = len(m.shared.AvailableDependencies)
+	}
+
 	headerBox := lipgloss.NewStyle().
 		Border(lipgloss.DoubleBorder()).
 		BorderForeground(lipgloss.Color("#0EA5E9")).
 		Padding(1, 2).
 		Align(lipgloss.Center).
 		Width(62).
-		Render(fmt.Sprintf("📦 Add Dependencies (%d available)", len(m.shared.AvailableDependencies)))
+		Render(fmt.Sprintf("%s (%d available)", headerText, itemCount))
 
 	b.WriteString(headerBox + "\n\n")
 
@@ -329,12 +352,19 @@ func (m *RepoSelectionModel) View() string {
 
 // handleKeys handles keyboard input
 func (m *RepoSelectionModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Check if we're in SOURCE selection mode
+	isSourceMode := len(m.shared.AvailableSourceRepos) > 0
+
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, TransitionToScreen(ScreenMainMenu)
 
 	case " ":
-		// Multi-select - toggle selection using delegate
+		if isSourceMode {
+			// SOURCE MODE: space does nothing (single-select only)
+			return m, nil
+		}
+		// PACKAGE MODE: Multi-select - toggle selection using delegate
 		currentIndex := m.list.Index()
 		if currentIndex >= 0 && currentIndex < len(m.shared.AvailableDependencies) {
 			m.delegate.toggleSelection(currentIndex)
@@ -342,7 +372,24 @@ func (m *RepoSelectionModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		// Confirm multi-selection and move to configuration
+		if isSourceMode {
+			// SOURCE MODE: Select single source and move to source configuration
+			currentIndex := m.list.Index()
+			if currentIndex >= 0 && currentIndex < len(m.shared.AvailableSourceRepos) {
+				selectedRepo := m.shared.AvailableSourceRepos[currentIndex]
+				m.shared.SourceProject = &core.Project{
+					Name: selectedRepo.Name,
+					Path: "",
+				}
+				m.logger.Info("source_selection", fmt.Sprintf("Selected source: %s/%s", selectedRepo.Owner, selectedRepo.Name))
+
+				// Go to source config (save location editing)
+				return m, TransitionToScreen(ScreenSourceConfig)
+			}
+			return m, nil
+		}
+
+		// PACKAGE MODE: Confirm multi-selection and move to configuration
 		selectedIndices := m.delegate.getSelectedIndices()
 		if len(selectedIndices) == 0 {
 			// Don't allow proceeding without selecting packages
@@ -365,6 +412,18 @@ func (m *RepoSelectionModel) loadRepositories() tea.Cmd {
 		repos, err := core.ListGitHubRepos(m.logger)
 		return reposLoadedMsg{repos: repos, err: err}
 	}
+}
+
+// setupListFromSource configures the list with source repositories (single-select mode)
+func (m *RepoSelectionModel) setupListFromSource() {
+	items := make([]list.Item, len(m.shared.AvailableSourceRepos))
+	for i, repo := range m.shared.AvailableSourceRepos {
+		items[i] = RepoItem{
+			repo:  repo,
+			index: i,
+		}
+	}
+	m.list.SetItems(items)
 }
 
 // setupList configures the list with repository items

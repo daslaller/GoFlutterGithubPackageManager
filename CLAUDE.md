@@ -20,18 +20,79 @@ The project follows a clean architecture pattern with clear separation of concer
 - **reco.go**: Smart recommendations system
 
 ### TUI Interface (`internal/tui/models/`)
-- **app_model.go**: Main application coordinator that manages screen transitions and shared state
-- **One model per screen architecture**:
-  - **main_menu_model.go**: Main menu with 5 options (prerequisites, GitHub repo, configure search, update local package, self-update)
-  - **source_selection_model.go**: Select Flutter source project to work on
-  - **source_config_model.go**: Configure download location and project naming (with file picker)
-  - **source_download_model.go**: Download/clone selected source project
-  - **search_config_model.go**: Configure repository search filters (owner, language, topic)
-  - **github_package_repo_multiselection_model.go**: Multi-select packages to add as dependencies
+
+**CRITICAL: GitHub Repo Flow (Option 2) - DO NOT MODIFY WITHOUT UNDERSTANDING**
+
+The GitHub repo flow uses a DUAL-MODE multiselect screen. This is intentional and must not be changed:
+
+1. **github_source_repo_selection_model.go** - LOADING SCREEN ONLY
+   - Shows spinner while fetching repos from GitHub
+   - Stores repos in `m.shared.AvailableSourceRepos`
+   - Transitions to `ScreenSourceSelection`
+   - **DO NOT make this show a list - it's just a loader**
+
+2. **github_package_repo_multiselection_model.go** - DUAL-MODE SCREEN
+   - **MODE 1 - Source Selection (ScreenSourceSelection):**
+     - Triggered when `len(m.shared.AvailableSourceRepos) > 0`
+     - Shows header: "📁 Select Source Flutter Project"
+     - SINGLE-SELECT ONLY - space bar does nothing
+     - Enter selects ONE source project and goes to `ScreenSourceConfig`
+
+   - **MODE 2 - Package Multiselect (ScreenDependencySelection):**
+     - Triggered when `len(m.shared.AvailableDependencies) > 0` AND `len(m.shared.AvailableSourceRepos) == 0`
+     - Shows header: "📦 Add Dependencies"
+     - MULTI-SELECT - space bar toggles checkmarks
+     - Enter confirms multiple selections and goes to `ScreenConfiguration`
+
+3. **source_config_model.go** - Source project configuration
+   - Edit save location (default: ./projects)
+   - Edit project name
+   - Copies `AvailableSourceRepos` → `AvailableDependencies`
+   - Clears `AvailableSourceRepos`
+   - Goes to `ScreenDependencySelection` (which enters MODE 2)
+
+**The EXACT flow is:**
+```
+Main Menu Option 2
+  ↓
+github_source_repo_selection_model.go (LOADER)
+  - Fetches repos from GitHub
+  - Stores in AvailableSourceRepos
+  ↓
+ScreenSourceSelection
+  ↓
+github_package_repo_multiselection_model.go (MODE 1 - SOURCE)
+  - Header: "📁 Select Source Flutter Project"
+  - Single-select (space does nothing)
+  - User selects ONE source with Enter
+  ↓
+ScreenSourceConfig
+  ↓
+source_config_model.go
+  - User edits save location and name
+  - Copies AvailableSourceRepos → AvailableDependencies
+  - Clears AvailableSourceRepos
+  - Presses Enter on "Continue"
+  ↓
+ScreenDependencySelection
+  ↓
+github_package_repo_multiselection_model.go (MODE 2 - PACKAGES)
+  - Header: "📦 Add Dependencies"
+  - Multi-select (space toggles checkmarks)
+  - User selects MULTIPLE packages with space
+  - Confirms with Enter
+  ↓
+ScreenConfiguration (package configuration)
+```
+
+**Other screens:**
+  - **main_menu_model.go**: Main menu with 5 options
+  - **search_config_model.go**: Configure repository search filters
   - **configuration_model.go**: Configure selected packages (branches, names, etc.)
   - **confirmation_model.go**: Review changes before execution
   - **execution_model.go**: Execute the pub add commands
   - **results_model.go**: Show results and recommendations
+
 - Uses bubbletea framework with lipgloss styling
 - Implements Flutter-inspired UI design with bordered headers and consistent color scheme
 

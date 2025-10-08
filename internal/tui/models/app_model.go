@@ -332,14 +332,12 @@ func (m *AppModel) transitionToScreen(screen AppScreen, data interface{}) (tea.M
 
 	case ScreenSourceSelection:
 		if m.sourceSelection == nil {
-			// Route to GitHub repo model for now (building on existing foundation)
-			m.sourceSelection = NewGitHubRepoModel(m.cfg, m.logger, m.SharedState)
+			m.sourceSelection = NewRepoSelectionModel(m.cfg, m.logger, m.SharedState)
 		}
 		return m, m.sourceSelection.Init()
 	case ScreenSourceConfig:
 		if m.sourceConfig == nil {
-			// Route to configuration model for now (building on existing foundation)
-			m.sourceConfig = NewConfigurationModel(m.cfg, m.logger, m.SharedState)
+			m.sourceConfig = NewSourceConfigModel(m.cfg, m.logger, m.SharedState)
 		}
 		return m, m.sourceConfig.Init()
 	case ScreenSourceDownload:

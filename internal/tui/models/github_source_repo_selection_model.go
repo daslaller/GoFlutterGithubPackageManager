@@ -79,11 +79,11 @@ func (m *GitHubRepoModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Store repositories for the selection screen and reset any previous picks
-		m.shared.AvailableDependencies = msg.repos
+		// Store repositories for SOURCE selection
+		m.shared.AvailableSourceRepos = msg.repos
 		m.shared.SelectedDependencies = nil
 
-		return m, TransitionToScreen(ScreenDependencySelection)
+		return m, TransitionToScreen(ScreenSourceSelection)
 	}
 
 	return m, nil
