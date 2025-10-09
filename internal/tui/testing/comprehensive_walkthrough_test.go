@@ -17,6 +17,21 @@ import (
 	"github.com/daslaller/GoFlutterGithubPackageManager/internal/tui/models"
 )
 
+// waitForMainMenu skips splash screen and goes directly to main menu for testing
+func waitForMainMenu(app tea.Model) (tea.Model, error) {
+	// For testing, skip splash screen and go directly to main menu
+	// Create a screen transition message directly
+	transitionMsg := models.ScreenTransitionMsg{Screen: models.ScreenMainMenu}
+
+	// Send the transition message to the app
+	updatedApp, _ := app.Update(transitionMsg)
+
+	// Wait a bit for the transition to complete
+	time.Sleep(50 * time.Millisecond)
+
+	return updatedApp, nil
+}
+
 // TestCompleteMenuWalkthrough tests each menu option and verifies correct screen content
 func TestCompleteMenuWalkthrough(t *testing.T) {
 	cfg := core.Config{Debug: true, Quiet: true}
@@ -99,13 +114,14 @@ func TestCompleteMenuWalkthrough(t *testing.T) {
 			app := models.NewAppModel(cfg, logger)
 			app.Init()
 
-			// Wait for initialization
-			time.Sleep(10 * time.Millisecond)
+			// Wait for splash screen to complete and transition to main menu
+			appModel, _ := waitForMainMenu(app)
+			app = appModel.(*models.AppModel)
 
 			// Get initial view to confirm we're on main menu
 			initialView := app.View()
 			if !strings.Contains(initialView, "Flutter Package Manager - Main Menu") {
-				t.Fatalf("Not starting from main menu. View: %s", initialView)
+				t.Fatalf("Not on main menu after splash. View preview: %s", initialView[:min(500, len(initialView))])
 			}
 
 			// Select the option by key
@@ -231,12 +247,16 @@ func TestActualTerminalFrames(t *testing.T) {
 	// Capture main menu
 	app := models.NewAppModel(cfg, logger)
 	app.Init()
+	appModel, _ := waitForMainMenu(app)
+	app = appModel.(*models.AppModel)
 	frames["main_menu"] = app.View()
 
 	// Capture each option screen
 	for i := 1; i <= 4; i++ {
 		app := models.NewAppModel(cfg, logger)
 		app.Init()
+		appModel, _ := waitForMainMenu(app)
+		app = appModel.(*models.AppModel)
 
 		keyMsg := tea.KeyMsg{
 			Type:  tea.KeyRunes,
@@ -296,8 +316,9 @@ func TestGitHubRepoToMultiselect(t *testing.T) {
 		app := models.NewAppModel(cfg, logger)
 		app.Init()
 
-		// Wait for initialization
-		time.Sleep(10 * time.Millisecond)
+		// Wait for splash screen to complete
+		appModel, _ := waitForMainMenu(app)
+		app = appModel.(*models.AppModel)
 
 		// Confirm we're on main menu
 		initialView := app.View()

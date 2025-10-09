@@ -15,7 +15,8 @@ import (
 type AppScreen int
 
 const (
-	ScreenMainMenu      AppScreen = iota
+	ScreenSplash        AppScreen = iota // NEW: Initial splash screen with prerequisites check
+	ScreenMainMenu
 	ScreenPrerequisites           // NEW: Check prerequisites and provide guidance
 	ScreenScanDirectories
 	ScreenGitHubRepo
@@ -45,6 +46,7 @@ type AppModel struct {
 	height        int
 
 	// Screen models
+	splash              tea.Model // NEW: Splash screen with prerequisites check
 	mainMenu            tea.Model
 	prerequisites       tea.Model // NEW: Prerequisites checking
 	scanDirectories     tea.Model
@@ -110,7 +112,7 @@ func NewAppModel(cfg core.Config, logger *core.Logger) *AppModel {
 	return &AppModel{
 		cfg:           cfg,
 		logger:        logger,
-		currentScreen: ScreenMainMenu,
+		currentScreen: ScreenSplash, // Start with splash screen
 		SharedState:   sharedState,
 		cacheWarmer:   cacheWarmer,
 	}
@@ -121,9 +123,9 @@ func (m *AppModel) Init() tea.Cmd {
 	// Start background cache warming for better performance
 	m.cacheWarmer.Start()
 
-	// Initialize the first screen (MainMenu)
-	m.mainMenu = NewMainMenuModel(m.cfg, m.logger, m.SharedState)
-	return m.mainMenu.Init()
+	// Initialize the first screen (Splash Screen)
+	m.splash = NewSplashScreenModel(m.cfg, m.logger, m.SharedState)
+	return m.splash.Init()
 }
 
 // Update handles messages and coordinates between screens
@@ -157,6 +159,10 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // View renders the current screen
 func (m *AppModel) View() string {
 	switch m.currentScreen {
+	case ScreenSplash:
+		if m.splash != nil {
+			return m.splash.View()
+		}
 	case ScreenMainMenu:
 		if m.mainMenu != nil {
 			return m.mainMenu.View()
@@ -231,6 +237,10 @@ func (m *AppModel) updateCurrentScreen(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch m.currentScreen {
+	case ScreenSplash:
+		if m.splash != nil {
+			m.splash, cmd = m.splash.Update(msg)
+		}
 	case ScreenMainMenu:
 		if m.mainMenu != nil {
 			m.mainMenu, cmd = m.mainMenu.Update(msg)
@@ -305,6 +315,12 @@ func (m *AppModel) transitionToScreen(screen AppScreen, data interface{}) (tea.M
 	m.currentScreen = screen
 
 	switch screen {
+	case ScreenSplash:
+		if m.splash == nil {
+			m.splash = NewSplashScreenModel(m.cfg, m.logger, m.SharedState)
+		}
+		return m, m.splash.Init()
+
 	case ScreenMainMenu:
 		if m.mainMenu == nil {
 			m.mainMenu = NewMainMenuModel(m.cfg, m.logger, m.SharedState)
