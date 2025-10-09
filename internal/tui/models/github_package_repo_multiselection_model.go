@@ -308,7 +308,8 @@ func (m *RepoSelectionModel) View() string {
 	b.WriteString(headerBox + "\n\n")
 
 	// Calculate overflow indicators using list's internal pagination
-	totalItems := len(m.shared.AvailableDependencies)
+	// Use correct list depending on mode
+	totalItems := itemCount
 	if totalItems > 0 {
 		visibleItems := m.list.Paginator.ItemsOnPage(totalItems)
 		currentPage := m.list.Paginator.Page

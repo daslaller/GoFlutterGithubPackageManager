@@ -67,7 +67,7 @@ func TestSplashScreenContent(t *testing.T) {
 	// Verify splash screen content
 	// The ASCII logo uses box drawing characters, so check for more reliable text
 	expectedContent := []string{
-		"Checking prerequisites",
+		"Initializing prerequisite checks",
 		"q: quit",
 	}
 
@@ -102,8 +102,8 @@ func TestSplashScreenTransition(t *testing.T) {
 
 	// Verify initial state shows checking
 	view := splash.View()
-	if !strings.Contains(view, "Checking prerequisites") {
-		t.Error("Expected to see 'Checking prerequisites' message")
+	if !strings.Contains(view, "Initializing prerequisite") && !strings.Contains(view, "Checking Prerequisite") {
+		t.Error("Expected to see prerequisite checking message")
 	}
 
 	t.Log("Splash screen transition test completed")
