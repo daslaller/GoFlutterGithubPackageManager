@@ -1,25 +1,11 @@
-// Package picker provides a reusable Bubble Tea model that wraps the
-// Charmbracelet bubbles/filepicker component. It can be embedded into
-// other TUIs or run as a standalone program via bubbletea.Program.
+// Package models/picker.go - File Picker Component
 //
-// How to confirm a selection:
-//   - Press Enter on a highlighted item to select it.
-//   - Press q, Esc, or Ctrl+C to quit without selection.
-//
-// Modes:
-//   - File mode (SelectDir = false): Enter confirms the highlighted file.
-//   - Directory mode (SelectDir = true): Enter confirms the highlighted
-//     directory. If you press Enter on a file, its parent directory is
-//     selected.
-//
-// Navigation hints:
-//   - Use arrow keys, h/j/k/l, or PgUp/PgDn to move.
-//   - Use Left/Backspace to go up a directory, Right/Enter to descend into
-//     a directory.
-//
-// After the program exits, check Model.Selected for the chosen path and
-// Model.Err for any transient error that might have been displayed.
-package picker
+// Reusable directory picker component for source configuration.
+// Wraps the Charmbracelet bubbles/filepicker with sensible defaults.
+
+package models
+
+// Integrated picker model used by SourceConfig and other screens
 
 import (
 	"errors"
@@ -107,6 +93,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case clearErrorMsg:
 		m.Err = nil
+	case tea.WindowSizeMsg:
+		// Pass window size to underlying filepicker
+		m.Filepicker.Height = msg.Height - 8
+		if m.Filepicker.Height < 10 {
+			m.Filepicker.Height = 10
+		}
 	}
 
 	var cmd tea.Cmd

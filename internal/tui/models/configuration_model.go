@@ -77,6 +77,17 @@ func (m *ConfigurationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKeys(msg)
 
+	case tea.WindowSizeMsg:
+		// Handle window resize - adjust input widths if needed
+		maxWidth := msg.Width - 10
+		if maxWidth < 20 {
+			maxWidth = 20
+		}
+		for i := range m.inputs {
+			m.inputs[i].Width = maxWidth
+		}
+		return m, nil
+
 	default:
 		// Update current input
 		if m.currentRepo < len(m.shared.SelectedDependencies) && len(m.inputs) > 0 {

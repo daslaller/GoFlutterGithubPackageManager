@@ -247,14 +247,6 @@ func (m *MainMenuModel) selectCurrentChoice() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// checkbox renders a checkbox like in the bubbletea documentation
-func (m *MainMenuModel) checkbox(label string, checked bool) string {
-	if checked {
-		return m.checkboxStyle.Render("[x] " + label)
-	}
-	return fmt.Sprintf("[ ] %s", label)
-}
-
 // tickTimer returns a command for the countdown timer
 func (m *MainMenuModel) tickTimer() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg {

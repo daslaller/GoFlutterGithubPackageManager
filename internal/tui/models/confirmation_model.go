@@ -72,6 +72,10 @@ func (m *ConfirmationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return m.handleKeys(msg)
+
+	case tea.WindowSizeMsg:
+		// Handle window resize gracefully
+		return m, nil
 	}
 	return m, nil
 }

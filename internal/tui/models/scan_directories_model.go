@@ -90,6 +90,10 @@ func (m *ScanDirectoriesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.logger.Info("scan_directories", fmt.Sprintf("Found %d Flutter projects", len(msg.projects)))
 		return m, nil
+
+	case tea.WindowSizeMsg:
+		// Handle window resize gracefully
+		return m, nil
 	}
 
 	return m, nil

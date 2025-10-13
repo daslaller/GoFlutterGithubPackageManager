@@ -78,6 +78,10 @@ func (m *ErrorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c", "enter", "esc":
 			return m, TransitionToScreen(m.returnScreen)
 		}
+
+	case tea.WindowSizeMsg:
+		// Handle window resize gracefully
+		return m, nil
 	}
 	return m, nil
 }

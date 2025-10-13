@@ -512,9 +512,4 @@ func (m *RepoSelectionModel) finalizeSelection() {
 	m.logger.Info("repo_selection", fmt.Sprintf("Selected %d repositories", len(selectedRepos)))
 }
 
-// isSelected checks if a repository at the given index is selected
-func (m *RepoSelectionModel) isSelected(index int) bool {
-	return m.delegate.selectedItems[index]
-}
-
 // Single-select mode - using native list rendering with beautiful styling

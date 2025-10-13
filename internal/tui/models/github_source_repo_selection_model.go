@@ -84,6 +84,10 @@ func (m *GitHubRepoModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.shared.SelectedDependencies = nil
 
 		return m, TransitionToScreen(ScreenSourceSelection)
+
+	case tea.WindowSizeMsg:
+		// Handle window resize gracefully
+		return m, nil
 	}
 
 	return m, nil

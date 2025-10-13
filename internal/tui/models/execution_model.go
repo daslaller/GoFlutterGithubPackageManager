@@ -168,6 +168,14 @@ func (m *ExecutionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		progressModel, cmd := m.progress.Update(msg)
 		m.progress = progressModel.(progress.Model)
 		cmds = append(cmds, cmd)
+
+	case tea.WindowSizeMsg:
+		// Handle window resize - adjust progress bar width
+		m.progress.Width = msg.Width - 10
+		if m.progress.Width < 20 {
+			m.progress.Width = 20
+		}
+		return m, nil
 	}
 
 	return m, tea.Batch(cmds...)

@@ -192,6 +192,14 @@ func (m *SplashScreenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ScreenTransitionMsg:
 		// Forward transition message
 		return m, func() tea.Msg { return msg }
+
+	case tea.WindowSizeMsg:
+		// Handle window resize - adjust progress bar width
+		m.progress.Width = msg.Width - 20
+		if m.progress.Width < 20 {
+			m.progress.Width = 20
+		}
+		return m, nil
 	}
 
 	return m, nil

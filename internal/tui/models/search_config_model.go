@@ -106,6 +106,16 @@ func (m *SearchConfigModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKeys(msg)
 
+	case tea.WindowSizeMsg:
+		// Handle window resize - adjust input widths if needed
+		maxWidth := msg.Width - 15
+		if maxWidth < 20 {
+			maxWidth = 20
+		}
+		m.pathInput.Width = maxWidth
+		m.depthInput.Width = maxWidth / 2
+		return m, nil
+
 	default:
 		// Update current input if in input mode
 		if m.inputMode {

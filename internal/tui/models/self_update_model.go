@@ -144,6 +144,10 @@ func (m *SelfUpdateModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ScreenTransitionMsg:
 		// Forward transition message
 		return m, func() tea.Msg { return msg }
+
+	case tea.WindowSizeMsg:
+		// Handle window resize gracefully
+		return m, nil
 	}
 
 	return m, nil

@@ -9,7 +9,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/filepicker"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -23,10 +22,10 @@ type SourceConfigModel struct {
 	shared *AppState
 
 	// UI components
-	filepicker    filepicker.Model
-	pathInput     textinput.Model
-	nameInput     textinput.Model
-	showPicker    bool
+	picker     Model
+	pathInput  textinput.Model
+	nameInput  textinput.Model
+	showPicker bool
 
 	// State
 	focusIndex int // 0 = path, 1 = name, 2 = continue
@@ -40,17 +39,14 @@ type SourceConfigModel struct {
 
 // NewSourceConfigModel creates a new source configuration model
 func NewSourceConfigModel(cfg core.Config, logger *core.Logger, shared *AppState) *SourceConfigModel {
-	// Create filepicker for directory selection
-	fp := filepicker.New()
-	fp.DirAllowed = true
-	fp.FileAllowed = false // Only allow directory selection
-
-	// Start at current working directory
+	// Initialize reusable picker in directory mode
+	var startDir string
 	if cwd, err := os.Getwd(); err == nil {
-		fp.CurrentDirectory = cwd
+		startDir = cwd
 	} else {
-		fp.CurrentDirectory = "."
+		startDir = "."
 	}
+	pm := New(true, nil, startDir)
 
 	pathInput := textinput.New()
 	pathInput.Placeholder = "./projects"
@@ -68,7 +64,7 @@ func NewSourceConfigModel(cfg core.Config, logger *core.Logger, shared *AppState
 		cfg:        cfg,
 		logger:     logger,
 		shared:     shared,
-		filepicker: fp,
+		picker:     pm,
 		pathInput:  pathInput,
 		nameInput:  nameInput,
 		showPicker: false,
@@ -104,24 +100,26 @@ func (m *SourceConfigModel) Init() tea.Cmd {
 func (m *SourceConfigModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// If filepicker is shown, handle its updates
 	if m.showPicker {
-		var cmd tea.Cmd
-		m.filepicker, cmd = m.filepicker.Update(msg)
-
-		// Check if user selected a directory
-		if didSelect, path := m.filepicker.DidSelectFile(msg); didSelect {
-			m.pathInput.SetValue(path)
-			m.showPicker = false
-			m.logger.Info("source_config", fmt.Sprintf("Selected directory: %s", path))
-		}
-
-		// Check for ESC to close picker
+		// Intercept quit keys to close picker without quitting the app
 		if keyMsg, ok := msg.(tea.KeyMsg); ok {
 			switch keyMsg.String() {
-			case "esc":
+			case "esc", "q", "ctrl+c":
 				m.showPicker = false
 				m.updateFocus()
 				return m, nil
 			}
+		}
+
+		var cmd tea.Cmd
+		var tm tea.Model
+		tm, cmd = m.picker.Update(msg)
+		m.picker = tm.(Model)
+
+		// If a selection was made, capture and close
+		if m.picker.Selected != "" {
+			m.pathInput.SetValue(m.picker.Selected)
+			m.showPicker = false
+			m.logger.Info("source_config", fmt.Sprintf("Selected directory: %s", m.picker.Selected))
 		}
 
 		return m, cmd
@@ -130,6 +128,16 @@ func (m *SourceConfigModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return m.handleKeys(msg)
+
+	case tea.WindowSizeMsg:
+		// Handle window resize - adjust input widths if needed
+		maxWidth := msg.Width - 15
+		if maxWidth < 20 {
+			maxWidth = 20
+		}
+		m.pathInput.Width = maxWidth
+		m.nameInput.Width = maxWidth
+		return m, nil
 
 	default:
 		// Update the active input
@@ -151,7 +159,7 @@ func (m *SourceConfigModel) View() string {
 		b.WriteString("\n  ")
 		b.WriteString(m.headerStyle.Render("📁 Select Save Location"))
 		b.WriteString("\n\n")
-		b.WriteString(m.filepicker.View())
+		b.WriteString(m.picker.View())
 		b.WriteString("\n\n")
 		b.WriteString(m.helpStyle.Render("Navigate: ↑/↓ • Select: enter • Cancel: esc"))
 		return b.String()
@@ -226,7 +234,7 @@ func (m *SourceConfigModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Open filepicker for directory browsing (only when on path field)
 		if m.focusIndex == 0 {
 			m.showPicker = true
-			return m, m.filepicker.Init()
+			return m, m.picker.Init()
 		}
 		return m, nil
 
@@ -294,7 +302,7 @@ func (m *SourceConfigModel) updateFocus() {
 // saveConfig saves the configuration to shared state
 func (m *SourceConfigModel) saveConfig() {
 	if m.shared.SourceProject != nil {
-		m.shared.SourceProject.Path = strings.TrimSpace(m.selectedPath)
+		m.shared.SourceProject.Path = strings.TrimSpace(m.pathInput.Value())
 		m.shared.SourceProject.Name = strings.TrimSpace(m.nameInput.Value())
 
 		m.logger.Info("source_config", fmt.Sprintf("Configured source: path=%s, name=%s",
