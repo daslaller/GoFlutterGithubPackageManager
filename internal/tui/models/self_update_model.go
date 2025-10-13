@@ -157,11 +157,11 @@ func (m *SelfUpdateModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *SelfUpdateModel) View() string {
 	var b strings.Builder
 
-	// Header
+	// Header with warm amber theme
 	header := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#0EA5E9")).
-		Foreground(lipgloss.Color("#0EA5E9")).
+		BorderForeground(lipgloss.Color("#F59E0B")).
+		Foreground(lipgloss.Color("#F59E0B")).
 		Padding(1, 2).
 		Align(lipgloss.Center).
 		Width(62).

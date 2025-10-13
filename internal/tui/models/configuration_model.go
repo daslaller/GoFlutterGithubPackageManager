@@ -1,7 +1,18 @@
-// Package models/configuration_model.go - Configuration Screen Model
+// Package models/configuration_model.go - Package Configuration Screen
 //
-// This file implements the package configuration screen where users can
-// specify package names, refs, subdirectories, etc.
+// This file implements the interactive configuration screen where users fine-tune
+// each selected package before installation. For each package, users can specify:
+//   - Package name (defaults to repository name)
+//   - Git ref (branch, tag, or commit hash - defaults to "main")
+//   - Subdirectory (optional, for monorepo packages)
+//
+// The screen uses a wizard-style flow, presenting one package at a time with
+// three text input fields. Navigation uses Tab/Shift+Tab between fields and
+// Enter to advance to the next package. All inputs support window resizing.
+//
+// After all packages are configured, this screen generates core.PkgSpec objects
+// that contain all the information needed for the execution screen to perform
+// the actual `dart pub add` or `flutter pub add` commands.
 
 package models
 
@@ -15,27 +26,37 @@ import (
 	"github.com/daslaller/GoFlutterGithubPackageManager/internal/core"
 )
 
-// ConfigurationModel handles package configuration
+// ConfigurationModel handles the interactive package configuration wizard.
+// It manages a collection of text inputs (3 per package) and provides
+// a focused, one-package-at-a-time configuration experience.
 type ConfigurationModel struct {
-	cfg    core.Config
-	logger *core.Logger
-	shared *AppState
+	cfg    core.Config // Application configuration
+	logger *core.Logger // Structured logger for tracking user choices
+	shared *AppState    // Shared state containing selected dependencies
 
-	// Configuration state
-	currentRepo  int
-	currentField int // 0=name, 1=ref, 2=subdir
-	packageSpecs []core.PkgSpec
-	inputs       []textinput.Model
-	complete     bool
+	// Configuration wizard state
+	currentRepo  int               // Index of current package being configured (0-based)
+	currentField int               // Current field focus: 0=name, 1=ref, 2=subdir
+	packageSpecs []core.PkgSpec    // Generated specs ready for installation
+	inputs       []textinput.Model // Flat array: [pkg0_name, pkg0_ref, pkg0_subdir, pkg1_name, ...]
+	complete     bool              // Whether all packages have been configured
 
-	// Styles
-	headerStyle   lipgloss.Style
-	selectedStyle lipgloss.Style
-	normalStyle   lipgloss.Style
-	helpStyle     lipgloss.Style
+	// Lipgloss styles for visual hierarchy
+	headerStyle   lipgloss.Style // Purple bold for headers
+	selectedStyle lipgloss.Style // White on purple background for active field
+	normalStyle   lipgloss.Style // Gray for inactive labels
+	helpStyle     lipgloss.Style // Gray italic for help text
 }
 
-// NewConfigurationModel creates a new package configuration model
+// NewConfigurationModel creates a new package configuration wizard.
+// The model creates three text inputs per selected package and initializes
+// them with sensible defaults (package name from repo, "main" for ref).
+//
+// Color scheme matches the app theme:
+//   - Headers: Purple (color 211)
+//   - Selected field: White text on purple background (#8B5CF6)
+//   - Normal text: Gray (color 241)
+//   - Help text: Gray italic
 func NewConfigurationModel(cfg core.Config, logger *core.Logger, shared *AppState) *ConfigurationModel {
 	return &ConfigurationModel{
 		cfg:          cfg,
@@ -63,30 +84,27 @@ func NewConfigurationModel(cfg core.Config, logger *core.Logger, shared *AppStat
 	}
 }
 
-// Init initializes the configuration screen
+// Init initializes the configuration screen by creating and populating all text inputs.
+// Returns textinput.Blink to start the cursor blinking animation.
 func (m *ConfigurationModel) Init() tea.Cmd {
 	m.setupInputs()
 	return textinput.Blink
 }
 
-// Update handles messages for configuration
+// Update handles all messages for the configuration wizard.
+//
+// Message handling:
+//   - tea.KeyMsg: Navigation (tab/shift+tab), advancing (enter), quitting (q)
+//   - Other: Forwarded to the currently focused text input for typing
+//
+// Input array layout: Each package uses 3 consecutive inputs [name, ref, subdir].
+// To get inputs for package N, use indices [N*3, N*3+1, N*3+2].
 func (m *ConfigurationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return m.handleKeys(msg)
-
-	case tea.WindowSizeMsg:
-		// Handle window resize - adjust input widths if needed
-		maxWidth := msg.Width - 10
-		if maxWidth < 20 {
-			maxWidth = 20
-		}
-		for i := range m.inputs {
-			m.inputs[i].Width = maxWidth
-		}
-		return m, nil
 
 	default:
 		// Update current input
@@ -103,7 +121,16 @@ func (m *ConfigurationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// View renders the configuration screen
+// View renders the configuration wizard interface.
+//
+// Display modes:
+//   - No packages selected: Shows error message
+//   - Configuring: Shows current package (N/Total), three input fields,
+//     and progress indicator
+//   - All configured: Shows success message and instruction to continue
+//
+// The currently active field is highlighted with the selectedStyle (purple bg).
+// Help text changes based on state (configuring vs. complete).
 func (m *ConfigurationModel) View() string {
 	if len(m.shared.SelectedDependencies) == 0 {
 		return m.headerStyle.Render("❌ No Repositories Selected") + "\n\nPlease go back and select repositories first.\n\nPress Q to return to main menu"
@@ -152,7 +179,15 @@ func (m *ConfigurationModel) View() string {
 	return b.String()
 }
 
-// handleKeys handles keyboard input
+// handleKeys processes keyboard navigation and input.
+//
+// Keyboard shortcuts:
+//   - Tab: Move to next field (name → ref → subdir → name)
+//   - Shift+Tab: Move to previous field (reverse of Tab)
+//   - Enter: Save current package and move to next, or proceed to confirmation
+//   - Q/Ctrl+C: Return to main menu (abandons configuration)
+//
+// All other keys are forwarded to the active text input for typing.
 func (m *ConfigurationModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
@@ -206,7 +241,16 @@ func (m *ConfigurationModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// setupInputs creates text inputs for all repositories
+// setupInputs creates a text input for each configuration field of each package.
+// Creates exactly 3 * len(SelectedDependencies) inputs in a flat array.
+//
+// For each package, creates:
+//   1. Name input: Pre-filled with repository name, width 40
+//   2. Ref input: Pre-filled with "main", width 40
+//   3. Subdir input: Empty with "(optional)" placeholder, width 40
+//
+// The first input (name of first package) is automatically focused.
+// If no packages are selected, marks the screen as complete (no-op state).
 func (m *ConfigurationModel) setupInputs() {
 	// Safety check - ensure we have selected repositories
 	if len(m.shared.SelectedDependencies) == 0 {
@@ -244,7 +288,11 @@ func (m *ConfigurationModel) setupInputs() {
 	m.focusCurrentInput()
 }
 
-// focusCurrentInput focuses the current input field
+// focusCurrentInput updates focus state of all inputs.
+// Blurs all inputs, then focuses the one at [currentRepo*3 + currentField].
+//
+// Performs bounds checking and logs debug messages if indices are invalid.
+// This prevents panics from out-of-bounds access during edge cases.
 func (m *ConfigurationModel) focusCurrentInput() {
 	// Safety check - ensure we have inputs
 	if len(m.inputs) == 0 {
@@ -268,7 +316,17 @@ func (m *ConfigurationModel) focusCurrentInput() {
 	}
 }
 
-// generatePackageSpecs creates package specifications from the inputs
+// generatePackageSpecs converts user input into core.PkgSpec structs.
+// Called when all packages have been configured and user presses Enter to proceed.
+//
+// For each package:
+//   - Reads name, ref, and subdir from their respective inputs
+//   - Uses defaults if fields are empty (repo name, "main", "")
+//   - Combines with repository URL from shared state
+//   - Creates a core.PkgSpec ready for dart/flutter pub add
+//
+// The generated specs are stored in both the model and shared state for access
+// by the confirmation and execution screens. Performs defensive bounds checking.
 func (m *ConfigurationModel) generatePackageSpecs() {
 	// Safety check - ensure we have selected repositories
 	if len(m.shared.SelectedDependencies) == 0 {

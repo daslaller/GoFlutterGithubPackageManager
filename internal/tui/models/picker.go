@@ -57,6 +57,8 @@ func clearErrorAfter(t time.Duration) tea.Cmd {
 // Note: Confirmation is done with Enter. Quit with q, Esc, or Ctrl+C.
 func New(selectDir bool, allowedTypes []string, startDir string) Model {
 	fp := filepicker.New()
+	fp.Height = 15 // Set a reasonable default height for better visibility
+
 	if len(allowedTypes) > 0 {
 		fp.AllowedTypes = allowedTypes
 	}

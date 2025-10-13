@@ -136,13 +136,15 @@ func (m *SearchConfigModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *SearchConfigModel) View() string {
 	var b strings.Builder
 
-	// Beautiful bordered header matching the design
+	// Beautiful bordered header with warm amber theme
 	headerBox := lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
-		BorderForeground(lipgloss.Color("#0EA5E9")).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#F59E0B")).
+		Foreground(lipgloss.Color("#F59E0B")).
 		Padding(1, 2).
 		Align(lipgloss.Center).
 		Width(62).
+		Bold(true).
 		Render("⚙️ Configure Directory Search")
 
 	b.WriteString(headerBox + "\n\n")

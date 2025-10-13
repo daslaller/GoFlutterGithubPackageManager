@@ -192,14 +192,6 @@ func (m *SplashScreenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ScreenTransitionMsg:
 		// Forward transition message
 		return m, func() tea.Msg { return msg }
-
-	case tea.WindowSizeMsg:
-		// Handle window resize - adjust progress bar width
-		m.progress.Width = msg.Width - 20
-		if m.progress.Width < 20 {
-			m.progress.Width = 20
-		}
-		return m, nil
 	}
 
 	return m, nil
@@ -209,11 +201,11 @@ func (m *SplashScreenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *SplashScreenModel) View() string {
 	var b strings.Builder
 
-	// Compact logo with consistent theme
+	// Compact logo with warm amber theme
 	logoBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#0EA5E9")).
-		Foreground(lipgloss.Color("#0EA5E9")).
+		BorderForeground(lipgloss.Color("#F59E0B")).
+		Foreground(lipgloss.Color("#F59E0B")).
 		Padding(0, 2).
 		Align(lipgloss.Center).
 		Bold(true)

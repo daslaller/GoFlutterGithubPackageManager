@@ -132,13 +132,15 @@ func (m *MainMenuModel) View() string {
 
 	c := m.choice
 
-	// Beautiful bordered header like the README (cached style)
+	// Beautiful bordered header with warm amber color (consistent with source selection)
 	headerBox := lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
-		BorderForeground(lipgloss.Color("#0EA5E9")).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#F59E0B")).
+		Foreground(lipgloss.Color("#F59E0B")).
 		Padding(1, 2).
 		Align(lipgloss.Center).
 		Width(62).
+		Bold(true).
 		Render("🎯 Flutter Package Manager")
 
 	// Build content using pre-allocated slice

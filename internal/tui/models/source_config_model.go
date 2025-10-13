@@ -129,16 +129,6 @@ func (m *SourceConfigModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKeys(msg)
 
-	case tea.WindowSizeMsg:
-		// Handle window resize - adjust input widths if needed
-		maxWidth := msg.Width - 15
-		if maxWidth < 20 {
-			maxWidth = 20
-		}
-		m.pathInput.Width = maxWidth
-		m.nameInput.Width = maxWidth
-		return m, nil
-
 	default:
 		// Update the active input
 		var cmd tea.Cmd
@@ -167,11 +157,11 @@ func (m *SourceConfigModel) View() string {
 
 	var b strings.Builder
 
-	// Beautiful bordered header with consistent theme
+	// Beautiful bordered header with warm amber theme
 	headerBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#0EA5E9")).
-		Foreground(lipgloss.Color("#0EA5E9")).
+		BorderForeground(lipgloss.Color("#F59E0B")).
+		Foreground(lipgloss.Color("#F59E0B")).
 		Padding(1, 2).
 		Align(lipgloss.Center).
 		Width(62).

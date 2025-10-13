@@ -1,4 +1,21 @@
-// Package models/execution_model.go - Execution Screen Model
+// Package models/execution_model.go - Package Installation Execution Screen
+//
+// This file implements the execution screen that handles the actual installation
+// of Flutter/Dart packages. It provides real-time progress feedback with:
+//   - Animated spinner for current operation
+//   - Progress bar showing overall completion
+//   - Live status updates for each package
+//   - Error handling and recovery
+//
+// The execution flow follows these steps:
+//   1. Create pubspec.yaml backup (safety measure)
+//   2. Validate all package specifications
+//   3. Install each package via dart/flutter pub add
+//   4. Run pub get to resolve dependencies
+//   5. Transition to results screen
+//
+// This model maintains full parity with the shell script's installation behavior
+// while providing a modern, visual progress interface.
 
 package models
 
@@ -14,46 +31,58 @@ import (
 	"github.com/daslaller/GoFlutterGithubPackageManager/internal/core"
 )
 
-// ExecutionModel handles package installation execution
+// ExecutionModel handles package installation execution with real-time progress feedback.
+// It orchestrates the multi-step installation process and provides visual indicators
+// for each stage of the operation.
 type ExecutionModel struct {
-	cfg    core.Config
-	logger *core.Logger
-	shared *AppState
+	cfg    core.Config // Application configuration
+	logger *core.Logger // Structured logger for operation tracking
+	shared *AppState    // Shared state containing package specs to install
 
-	// Execution state
-	executing   bool
-	currentStep int
-	totalSteps  int
-	stepName    string
-	progress    progress.Model
-	spinner     spinner.Model
-	complete    bool
-	err         error
+	// Execution state tracking
+	executing   bool            // Whether installation is currently in progress
+	currentStep int             // Current step number (1-based)
+	totalSteps  int             // Total number of steps to complete
+	stepName    string          // Human-readable name of current operation
+	progress    progress.Model  // Animated progress bar (gradient pink to orange)
+	spinner     spinner.Model   // Dot spinner for active operations
+	complete    bool            // Whether installation has finished
+	err         error           // Any error that occurred during execution
 
-	// Styles
-	headerStyle  lipgloss.Style
-	successStyle lipgloss.Style
-	errorStyle   lipgloss.Style
-	normalStyle  lipgloss.Style
+	// Lipgloss styles for consistent theming
+	headerStyle  lipgloss.Style // Purple bold header
+	successStyle lipgloss.Style // Green bold for success messages
+	errorStyle   lipgloss.Style // Red bold for errors
+	normalStyle  lipgloss.Style // Gray for normal text
 }
 
-// executionStepMsg represents progress through execution steps
+// executionStepMsg is sent internally when advancing to the next installation step.
+// It carries the step number, description, and any error that occurred.
 type executionStepMsg struct {
-	step     int
-	stepName string
-	err      error
+	step     int    // Step number (1-based)
+	stepName string // Human-readable step description
+	err      error  // Error if step failed, nil otherwise
 }
 
-// executionCompleteMsg is sent when execution is complete
+// executionCompleteMsg is sent when the entire installation process completes.
+// It contains the results for all packages and any overall error.
 type executionCompleteMsg struct {
-	results []core.ActionResult
-	err     error
+	results []core.ActionResult // Per-package installation results
+	err     error                // Overall execution error, if any
 }
 
-// NewExecutionModel creates a new execution model
+// NewExecutionModel creates a new execution screen model.
+// It calculates the total steps based on the number of packages to install
+// plus overhead steps (backup, validation, pub get).
+//
+// The model uses:
+//   - A gradient progress bar (pink to orange) for visual appeal
+//   - A dot spinner to indicate active work
+//   - Pre-configured lipgloss styles matching the app theme
 func NewExecutionModel(cfg core.Config, logger *core.Logger, shared *AppState) *ExecutionModel {
-	// Create progress bar
+	// Create progress bar with fixed width
 	p := progress.New(progress.WithScaledGradient("#FF7CCB", "#FDAB3D"))
+	p.Width = 40
 
 	// Create spinner
 	s := spinner.New()
@@ -95,7 +124,12 @@ func NewExecutionModel(cfg core.Config, logger *core.Logger, shared *AppState) *
 	}
 }
 
-// Init initializes the execution screen
+// Init initializes the execution screen and starts the installation process.
+// It detects whether this is a source clone flow (GitHub option 2) or a
+// standard package addition flow, then kicks off the installation sequence.
+//
+// Returns:
+//   - A batch command containing the spinner tick and installation starter
 func (m *ExecutionModel) Init() tea.Cmd {
 	// Check if this is a source clone flow (option 2)
 	if m.shared.SourceRepo != nil && m.shared.SourceProject != nil {
@@ -114,7 +148,16 @@ func (m *ExecutionModel) Init() tea.Cmd {
 	)
 }
 
-// Update handles messages for execution
+// Update handles all incoming messages during package installation.
+//
+// Message handling:
+//   - tea.KeyMsg: Allows proceeding to results when complete (enter/q)
+//   - executionStepMsg: Advances to next step, updates progress bar
+//   - executionCompleteMsg: Marks installation done, stores results
+//   - spinner.TickMsg: Animates the spinner during active work
+//   - progress.FrameMsg: Animates the progress bar smoothly
+//
+// The model ensures the spinner only animates while work is in progress.
 func (m *ExecutionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -168,20 +211,24 @@ func (m *ExecutionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		progressModel, cmd := m.progress.Update(msg)
 		m.progress = progressModel.(progress.Model)
 		cmds = append(cmds, cmd)
-
-	case tea.WindowSizeMsg:
-		// Handle window resize - adjust progress bar width
-		m.progress.Width = msg.Width - 10
-		if m.progress.Width < 20 {
-			m.progress.Width = 20
-		}
-		return m, nil
 	}
 
 	return m, tea.Batch(cmds...)
 }
 
-// View renders the execution screen
+// View renders the execution screen with live progress updates.
+//
+// The view changes based on state:
+//   - Error state: Shows error message and instructions to view results
+//   - Complete state: Shows success message and package count
+//   - Executing state: Shows spinner, current step, progress bar, and package list
+//
+// Each package in the list shows its status:
+//   - ⏳ Pending (not yet started)
+//   - 🔄 In progress (currently installing)
+//   - ✅ Complete (successfully installed)
+//
+// The progress bar uses a gradient and animates smoothly as steps complete.
 func (m *ExecutionModel) View() string {
 	var b strings.Builder
 
@@ -233,7 +280,9 @@ func (m *ExecutionModel) View() string {
 	return b.String()
 }
 
-// executeInstallation runs the package installation process
+// executeInstallation starts the package installation process.
+// This is the entry point that kicks off the first step (backup creation).
+// Returns a command that sends the first executionStepMsg after a brief delay.
 func (m *ExecutionModel) executeInstallation() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 		return executionStepMsg{
@@ -244,7 +293,18 @@ func (m *ExecutionModel) executeInstallation() tea.Cmd {
 	})
 }
 
-// executeNextStep continues the installation process
+// executeNextStep advances to the next installation step.
+// When all steps are complete, it generates success results for each package
+// and sends an executionCompleteMsg to transition to the results screen.
+//
+// Step sequence:
+//   - Step 1: Create pubspec.yaml backup
+//   - Step 2: Validate package specifications
+//   - Steps 3..N+2: Install each package (N = number of packages)
+//   - Final step: Run pub get
+//
+// Each step simulates work with an 800ms delay for demo purposes.
+// In production, these would be replaced with actual dart/flutter pub commands.
 func (m *ExecutionModel) executeNextStep() tea.Cmd {
 	if m.currentStep >= m.totalSteps {
 		// Installation complete

@@ -17,6 +17,7 @@ func RunNew(cfg core.Config, logger *core.Logger) error {
 	app := models.NewAppModel(cfg, logger)
 
 	// Start the bubbletea program
+	// Note: We request a larger initial terminal via LINES/COLUMNS env vars if needed
 	p := tea.NewProgram(app, tea.WithAltScreen())
 	_, err := p.Run()
 	return err
