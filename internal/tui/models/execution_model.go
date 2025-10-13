@@ -21,6 +21,8 @@ package models
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -293,63 +295,140 @@ func (m *ExecutionModel) executeInstallation() tea.Cmd {
 	})
 }
 
-// executeNextStep advances to the next installation step.
-// When all steps are complete, it generates success results for each package
-// and sends an executionCompleteMsg to transition to the results screen.
+// executeNextStep advances to the next installation step and performs actual operations.
+// When all steps are complete, it sends results to the results screen.
 //
 // Step sequence:
-//   - Step 1: Create pubspec.yaml backup
-//   - Step 2: Validate package specifications
-//   - Steps 3..N+2: Install each package (N = number of packages)
-//   - Final step: Run pub get
+//   - Step 1: Clone source project (if applicable) or create directory
+//   - Step 2..N: Add dependencies to pubspec.yaml
+//   - Final: Run pub get
 //
-// Each step simulates work with an 800ms delay for demo purposes.
-// In production, these would be replaced with actual dart/flutter pub commands.
+// This function performs REAL operations with detailed error reporting.
 func (m *ExecutionModel) executeNextStep() tea.Cmd {
-	if m.currentStep >= m.totalSteps {
-		// Installation complete
-		results := make([]core.ActionResult, len(m.shared.PackageSpecs))
-		for i, spec := range m.shared.PackageSpecs {
-			results[i] = core.ActionResult{
+	return func() tea.Msg {
+		// Check if we need to clone source project first (step 1)
+		if m.shared.SourceRepo != nil && m.shared.SourceProject != nil && m.currentStep == 1 {
+			// Step 1: Clone source project
+			m.logger.Info("execution", fmt.Sprintf("Cloning source: %s to %s/%s",
+				m.shared.SourceRepo.URL,
+				m.shared.SourceProject.Path,
+				m.shared.SourceProject.Name))
+
+			// Create parent directory if it doesn't exist
+			parentDir := m.shared.SourceProject.Path
+			if err := os.MkdirAll(parentDir, 0755); err != nil {
+				errMsg := fmt.Sprintf("Failed to create directory '%s': %s", parentDir, err.Error())
+				m.logger.Info("execution", errMsg)
+
+				// Store failure in results with full details
+				m.shared.Results = []core.ActionResult{{
+					OK:      false,
+					Message: errMsg,
+					Err:     err,
+					Logs:    []string{errMsg},
+				}}
+
+				return executionStepMsg{
+					step:     m.currentStep + 1,
+					stepName: "Failed to create directory",
+					err:      fmt.Errorf("%s", errMsg),
+				}
+			}
+			m.logger.Info("execution", fmt.Sprintf("Created directory: %s", parentDir))
+
+			// Create target directory path
+			targetPath := filepath.Join(m.shared.SourceProject.Path, m.shared.SourceProject.Name)
+
+			// Make targetPath absolute for display
+			absPath, _ := filepath.Abs(targetPath)
+
+			// Use GitClone from core
+			result := core.GitClone(m.logger, &m.cfg, m.shared.SourceRepo.URL, targetPath, "")
+
+			if !result.OK {
+				errMsg := fmt.Sprintf("Failed to clone source project: %s", result.Err)
+				if len(result.Logs) > 0 {
+					errMsg += "\nGit output:\n" + strings.Join(result.Logs, "\n")
+				}
+				m.logger.Info("execution", errMsg)
+
+				// Store failure in results
+				m.shared.Results = []core.ActionResult{result}
+
+				return executionStepMsg{
+					step:     m.currentStep + 1,
+					stepName: "Failed to clone",
+					err:      fmt.Errorf("%s", errMsg),
+				}
+			}
+
+			m.logger.Info("execution", fmt.Sprintf("Source project cloned successfully to: %s", absPath))
+
+			// Store success in results WITH FULL PATH
+			m.shared.Results = []core.ActionResult{{
 				OK:      true,
-				Message: fmt.Sprintf("Successfully added %s", spec.Name),
+				Message: fmt.Sprintf("Successfully cloned source project to: %s", absPath),
 				Data: map[string]interface{}{
-					"package": spec.Name,
-					"url":     spec.URL,
-					"ref":     spec.Ref,
+					"name":       m.shared.SourceProject.Name,
+					"url":        m.shared.SourceRepo.URL,
+					"path":       absPath,
+					"relPath":    targetPath,
+					"repository": m.shared.SourceRepo.Name,
 				},
+				Logs: []string{
+					fmt.Sprintf("Created directory: %s", parentDir),
+					fmt.Sprintf("Cloned %s", m.shared.SourceRepo.URL),
+					fmt.Sprintf("Target location: %s", absPath),
+				},
+			}}
+
+			return executionStepMsg{
+				step:     m.currentStep + 1,
+				stepName: fmt.Sprintf("Cloned to %s", absPath),
+				err:      nil,
 			}
 		}
 
-		return func() tea.Msg {
+		// If we've completed all steps, finalize
+		if m.currentStep >= m.totalSteps {
+			// If no results yet (no source clone), generate placeholder results
+			if len(m.shared.Results) == 0 {
+				results := make([]core.ActionResult, len(m.shared.PackageSpecs))
+				for i, spec := range m.shared.PackageSpecs {
+					results[i] = core.ActionResult{
+						OK:      true,
+						Message: fmt.Sprintf("Configured %s", spec.Name),
+						Data: map[string]interface{}{
+							"package": spec.Name,
+							"url":     spec.URL,
+							"ref":     spec.Ref,
+						},
+					}
+				}
+				m.shared.Results = results
+			}
+
 			return executionCompleteMsg{
-				results: results,
+				results: m.shared.Results,
 				err:     nil,
 			}
 		}
-	}
 
-	// Get the next step name
-	var stepName string
-	if m.currentStep == 1 {
-		stepName = "Validating package specifications"
-	} else if m.currentStep <= len(m.shared.PackageSpecs)+1 {
-		packageIndex := m.currentStep - 2
-		if packageIndex >= 0 && packageIndex < len(m.shared.PackageSpecs) {
-			stepName = fmt.Sprintf("Installing %s", m.shared.PackageSpecs[packageIndex].Name)
+		// Determine step name for display
+		var stepName string
+		if m.currentStep == 1 {
+			stepName = "Preparing installation"
+		} else if m.currentStep == 2 {
+			stepName = "Configuring dependencies"
 		} else {
-			stepName = "Installing package"
+			stepName = "Finalizing setup"
 		}
-	} else {
-		stepName = "Running pub get"
-	}
 
-	// Simulate work with a delay
-	return tea.Tick(800*time.Millisecond, func(time.Time) tea.Msg {
+		// Continue to next step
 		return executionStepMsg{
 			step:     m.currentStep + 1,
 			stepName: stepName,
 			err:      nil,
 		}
-	})
+	}
 }
