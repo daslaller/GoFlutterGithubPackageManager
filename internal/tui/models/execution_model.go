@@ -60,13 +60,19 @@ func NewExecutionModel(cfg core.Config, logger *core.Logger, shared *AppState) *
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#13B9FD"))
 
+	// Calculate total steps (source clone + packages + backup + pub get)
+	totalSteps := len(shared.PackageSpecs) + 2
+	if shared.SourceProject != nil && shared.SourceProject.Path != "" {
+		totalSteps++ // Add step for cloning source project
+	}
+
 	return &ExecutionModel{
 		cfg:         cfg,
 		logger:      logger,
 		shared:      shared,
 		executing:   true,
 		currentStep: 0,
-		totalSteps:  len(shared.PackageSpecs) + 2, // packages + backup + pub get
+		totalSteps:  totalSteps,
 		stepName:    "Starting installation...",
 		progress:    p,
 		spinner:     s,
@@ -91,6 +97,17 @@ func NewExecutionModel(cfg core.Config, logger *core.Logger, shared *AppState) *
 
 // Init initializes the execution screen
 func (m *ExecutionModel) Init() tea.Cmd {
+	// Check if this is a source clone flow (option 2)
+	if m.shared.SourceRepo != nil && m.shared.SourceProject != nil {
+		// This is the GitHub source clone flow
+		// Log the information about what needs to be done
+		m.logger.Info("execution", fmt.Sprintf("Source clone flow: %s to %s/%s",
+			m.shared.SourceRepo.URL,
+			m.shared.SourceProject.Path,
+			m.shared.SourceProject.Name))
+		m.logger.Info("execution", "Note: Full source cloning implementation pending")
+	}
+
 	return tea.Batch(
 		m.spinner.Tick,
 		m.executeInstallation(),

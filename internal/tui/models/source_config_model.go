@@ -6,8 +6,10 @@ package models
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/filepicker"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -21,8 +23,10 @@ type SourceConfigModel struct {
 	shared *AppState
 
 	// UI components
-	pathInput textinput.Model
-	nameInput textinput.Model
+	filepicker    filepicker.Model
+	pathInput     textinput.Model
+	nameInput     textinput.Model
+	showPicker    bool
 
 	// State
 	focusIndex int // 0 = path, 1 = name, 2 = continue
@@ -31,10 +35,23 @@ type SourceConfigModel struct {
 	headerStyle   lipgloss.Style
 	selectedStyle lipgloss.Style
 	normalStyle   lipgloss.Style
+	helpStyle     lipgloss.Style
 }
 
 // NewSourceConfigModel creates a new source configuration model
 func NewSourceConfigModel(cfg core.Config, logger *core.Logger, shared *AppState) *SourceConfigModel {
+	// Create filepicker for directory selection
+	fp := filepicker.New()
+	fp.DirAllowed = true
+	fp.FileAllowed = false // Only allow directory selection
+
+	// Start at current working directory
+	if cwd, err := os.Getwd(); err == nil {
+		fp.CurrentDirectory = cwd
+	} else {
+		fp.CurrentDirectory = "."
+	}
+
 	pathInput := textinput.New()
 	pathInput.Placeholder = "./projects"
 	pathInput.SetValue("./projects")
@@ -51,33 +68,65 @@ func NewSourceConfigModel(cfg core.Config, logger *core.Logger, shared *AppState
 		cfg:        cfg,
 		logger:     logger,
 		shared:     shared,
+		filepicker: fp,
 		pathInput:  pathInput,
 		nameInput:  nameInput,
+		showPicker: false,
 		focusIndex: 0,
 
 		headerStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#8B5CF6")).
+			Foreground(lipgloss.Color("#0EA5E9")).
 			Bold(true),
 
 		selectedStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FFFFFF")).
-			Background(lipgloss.Color("#8B5CF6")).
+			Background(lipgloss.Color("#0EA5E9")).
 			Padding(0, 1),
 
 		normalStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#374151")),
+
+		helpStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#94A3B8")).
+			Italic(true),
 	}
 }
 
 // Init initializes the source config screen
 func (m *SourceConfigModel) Init() tea.Cmd {
 	m.focusIndex = 0
+	m.showPicker = false
 	m.pathInput.Focus()
 	return textinput.Blink
 }
 
 // Update handles messages for source configuration
 func (m *SourceConfigModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// If filepicker is shown, handle its updates
+	if m.showPicker {
+		var cmd tea.Cmd
+		m.filepicker, cmd = m.filepicker.Update(msg)
+
+		// Check if user selected a directory
+		if didSelect, path := m.filepicker.DidSelectFile(msg); didSelect {
+			m.pathInput.SetValue(path)
+			m.showPicker = false
+			m.logger.Info("source_config", fmt.Sprintf("Selected directory: %s", path))
+		}
+
+		// Check for ESC to close picker
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			switch keyMsg.String() {
+			case "esc":
+				m.showPicker = false
+				m.updateFocus()
+				return m, nil
+			}
+		}
+
+		return m, cmd
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return m.handleKeys(msg)
@@ -96,39 +145,58 @@ func (m *SourceConfigModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the source config screen
 func (m *SourceConfigModel) View() string {
+	// If filepicker is active, show it
+	if m.showPicker {
+		var b strings.Builder
+		b.WriteString("\n  ")
+		b.WriteString(m.headerStyle.Render("📁 Select Save Location"))
+		b.WriteString("\n\n")
+		b.WriteString(m.filepicker.View())
+		b.WriteString("\n\n")
+		b.WriteString(m.helpStyle.Render("Navigate: ↑/↓ • Select: enter • Cancel: esc"))
+		return b.String()
+	}
+
 	var b strings.Builder
 
-	// Beautiful bordered header
+	// Beautiful bordered header with consistent theme
 	headerBox := lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
+		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#0EA5E9")).
+		Foreground(lipgloss.Color("#0EA5E9")).
 		Padding(1, 2).
 		Align(lipgloss.Center).
 		Width(62).
+		Bold(true).
 		Render("⚙️ Configure Source Project")
 
 	b.WriteString(headerBox + "\n\n")
 
 	if m.shared.SourceProject != nil {
-		b.WriteString(fmt.Sprintf("Selected project: %s\n\n", m.shared.SourceProject.Name))
+		titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#0EA5E9")).Bold(true)
+		b.WriteString(fmt.Sprintf("Selected project: %s\n\n", titleStyle.Render(m.shared.SourceProject.Name)))
 	}
 
-	// Path input
+	// Path input with browse option
 	pathLabel := "Save location:"
 	if m.focusIndex == 0 {
-		pathLabel = m.selectedStyle.Render("► Save location:")
+		pathLabel = m.selectedStyle.Render("► " + pathLabel)
 	} else {
-		pathLabel = m.normalStyle.Render("  Save location:")
+		pathLabel = m.normalStyle.Render("  " + pathLabel)
 	}
 	b.WriteString(pathLabel + "\n")
-	b.WriteString("  " + m.pathInput.View() + "\n\n")
+	b.WriteString("  " + m.pathInput.View() + "\n")
+	if m.focusIndex == 0 {
+		b.WriteString("  " + m.helpStyle.Render("type path or press 'b' to browse...") + "\n")
+	}
+	b.WriteString("\n")
 
 	// Name input
 	nameLabel := "Project name:"
 	if m.focusIndex == 1 {
-		nameLabel = m.selectedStyle.Render("► Project name:")
+		nameLabel = m.selectedStyle.Render("► " + nameLabel)
 	} else {
-		nameLabel = m.normalStyle.Render("  Project name:")
+		nameLabel = m.normalStyle.Render("  " + nameLabel)
 	}
 	b.WriteString(nameLabel + "\n")
 	b.WriteString("  " + m.nameInput.View() + "\n\n")
@@ -143,7 +211,7 @@ func (m *SourceConfigModel) View() string {
 	b.WriteString(continueLabel + "\n\n")
 
 	// Help text
-	b.WriteString(m.normalStyle.Render("tab: next field • shift+tab: previous • enter: continue • q: back"))
+	b.WriteString(m.helpStyle.Render("tab: next field • shift+tab: previous • enter: select/continue • q: back"))
 
 	return b.String()
 }
@@ -153,6 +221,14 @@ func (m *SourceConfigModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c", "esc":
 		return m, TransitionToScreen(ScreenMainMenu)
+
+	case "b", "B":
+		// Open filepicker for directory browsing (only when on path field)
+		if m.focusIndex == 0 {
+			m.showPicker = true
+			return m, m.filepicker.Init()
+		}
+		return m, nil
 
 	case "tab":
 		m.focusIndex++
@@ -218,7 +294,7 @@ func (m *SourceConfigModel) updateFocus() {
 // saveConfig saves the configuration to shared state
 func (m *SourceConfigModel) saveConfig() {
 	if m.shared.SourceProject != nil {
-		m.shared.SourceProject.Path = strings.TrimSpace(m.pathInput.Value())
+		m.shared.SourceProject.Path = strings.TrimSpace(m.selectedPath)
 		m.shared.SourceProject.Name = strings.TrimSpace(m.nameInput.Value())
 
 		m.logger.Info("source_config", fmt.Sprintf("Configured source: path=%s, name=%s",

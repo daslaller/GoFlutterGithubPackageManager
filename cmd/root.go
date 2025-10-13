@@ -15,7 +15,7 @@ func Execute() error {
 
 	// Handle version flag
 	if cfg.ShowVersion {
-		fmt.Println("flutter-pm v1.0.0-alpha")
+		fmt.Printf("flutter-pm %s\n", core.CurrentVersion)
 		fmt.Println("AI-Powered Flutter Package Manager")
 		return nil
 	}

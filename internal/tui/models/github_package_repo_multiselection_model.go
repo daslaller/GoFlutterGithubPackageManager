@@ -422,6 +422,7 @@ func (m *RepoSelectionModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					Name: selectedRepo.Name,
 					Path: "",
 				}
+				m.shared.SourceRepo = &selectedRepo // Store the full repo info (includes URL)
 				m.logger.Info("source_selection", fmt.Sprintf("Selected source: %s/%s", selectedRepo.Owner, selectedRepo.Name))
 
 				// Go to source config (save location editing)

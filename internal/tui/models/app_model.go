@@ -74,12 +74,13 @@ type AppModel struct {
 // AppState holds data that needs to be shared between screens
 type AppState struct {
 	// Source project information (the Flutter project being worked ON)
-	SourceProject         *core.Project // The Flutter project we're modifying
-	SourceProjectPath     string        // Path to the source project
-	DetectedPubspecPath   string        // Detected local pubspec path
-	DetectedProject       string        // Detected local project name
-	LocalPubspecAvailable bool          // Whether local pubspec was found
-	HasGitDeps            bool          // Whether project has git dependencies
+	SourceProject         *core.Project        // The Flutter project we're modifying
+	SourceRepo            *core.RepoCandidate  // The source repo to clone (includes URL)
+	SourceProjectPath     string               // Path to the source project
+	DetectedPubspecPath   string               // Detected local pubspec path
+	DetectedProject       string               // Detected local project name
+	LocalPubspecAvailable bool                 // Whether local pubspec was found
+	HasGitDeps            bool                 // Whether project has git dependencies
 
 	// Available source projects (for selection)
 	AvailableSourceRepos []core.RepoCandidate // Available Flutter projects to work on
@@ -407,8 +408,7 @@ func (m *AppModel) transitionToScreen(screen AppScreen, data interface{}) (tea.M
 
 	case ScreenSelfUpdate:
 		if m.selfUpdate == nil {
-			// Route to execution model for now (building on existing foundation)
-			m.selfUpdate = NewExecutionModel(m.cfg, m.logger, m.SharedState)
+			m.selfUpdate = NewSelfUpdateModel(m.cfg, m.logger, m.SharedState)
 		}
 		return m, m.selfUpdate.Init()
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/progress"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/daslaller/GoFlutterGithubPackageManager/internal/core"
@@ -33,6 +34,9 @@ type SplashScreenModel struct {
 	transitionDelay  int // seconds before auto-transition
 	showDetailedView bool
 
+	// Progress bar
+	progress progress.Model
+
 	// Styles
 	titleStyle    lipgloss.Style
 	subtitleStyle lipgloss.Style
@@ -40,7 +44,6 @@ type SplashScreenModel struct {
 	successStyle  lipgloss.Style
 	warningStyle  lipgloss.Style
 	errorStyle    lipgloss.Style
-	progressStyle lipgloss.Style
 }
 
 // prerequisitesCheckMsg is sent when prerequisites check completes
@@ -60,6 +63,13 @@ type animationTickMsg struct{}
 
 // NewSplashScreenModel creates a new splash screen model
 func NewSplashScreenModel(cfg core.Config, logger *core.Logger, shared *AppState) *SplashScreenModel {
+	// Create progress bar with gradient and spring animation for smoothness
+	prog := progress.New(
+		progress.WithScaledGradient("#0EA5E9", "#8B5CF6"),
+		progress.WithSpringOptions(180, 50), // Frequency and damping for bounce
+	)
+	prog.Width = 40
+
 	return &SplashScreenModel{
 		cfg:              cfg,
 		logger:           logger,
@@ -72,6 +82,7 @@ func NewSplashScreenModel(cfg core.Config, logger *core.Logger, shared *AppState
 		currentCheck:     "",
 		currentIndex:     0,
 		totalChecks:      4, // Git, Flutter, Dart, GitHub CLI
+		progress:         prog,
 
 		titleStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#0EA5E9")).
@@ -91,10 +102,6 @@ func NewSplashScreenModel(cfg core.Config, logger *core.Logger, shared *AppState
 
 		errorStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("196")),
-
-		progressStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#0EA5E9")).
-			Bold(true),
 	}
 }
 
@@ -166,11 +173,21 @@ func (m *SplashScreenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.frame%3 == 0 && m.currentIndex < len(checkNames) {
 				m.currentCheck = checkNames[m.currentIndex]
 				m.currentIndex++
+
+				// Update progress bar with smooth animation
+				progressPercent := float64(m.currentIndex) / float64(m.totalChecks)
+				cmd := m.progress.SetPercent(progressPercent)
+				return m, tea.Batch(m.tickAnimation(), cmd)
 			}
 
 			return m, m.tickAnimation()
 		}
 		return m, nil
+
+	case progress.FrameMsg:
+		progressModel, cmd := m.progress.Update(msg)
+		m.progress = progressModel.(progress.Model)
+		return m, cmd
 
 	case ScreenTransitionMsg:
 		// Forward transition message
@@ -184,56 +201,34 @@ func (m *SplashScreenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *SplashScreenModel) View() string {
 	var b strings.Builder
 
-	// Beautiful bordered logo
-	logo := []string{
-		"███████╗██╗     ██╗   ██╗████████╗████████╗███████╗██████╗ ",
-		"██╔════╝██║     ██║   ██║╚══██╔══╝╚══██╔══╝██╔════╝██╔══██╗",
-		"█████╗  ██║     ██║   ██║   ██║      ██║   █████╗  ██████╔╝",
-		"██╔══╝  ██║     ██║   ██║   ██║      ██║   ██╔══╝  ██╔══██╗",
-		"██║     ███████╗╚██████╔╝   ██║      ██║   ███████╗██║  ██║",
-		"╚═╝     ╚══════╝ ╚═════╝    ╚═╝      ╚═╝   ╚══════╝╚═╝  ╚═╝",
-		"                                                             ",
-		"           ██████╗  █████╗  ██████╗██╗  ██╗ █████╗  ██████╗ ███████╗",
-		"           ██╔══██╗██╔══██╗██╔════╝██║ ██╔╝██╔══██╗██╔════╝ ██╔════╝",
-		"           ██████╔╝███████║██║     █████╔╝ ███████║██║  ███╗█████╗  ",
-		"           ██╔═══╝ ██╔══██║██║     ██╔═██╗ ██╔══██║██║   ██║██╔══╝  ",
-		"           ██║     ██║  ██║╚██████╗██║  ██╗██║  ██║╚██████╔╝███████╗",
-		"           ╚═╝     ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝",
-		"                                                                      ",
-		"                    ███╗   ███╗ █████╗ ███╗   ██╗ █████╗  ██████╗ ███████╗██████╗ ",
-		"                    ████╗ ████║██╔══██╗████╗  ██║██╔══██╗██╔════╝ ██╔════╝██╔══██╗",
-		"                    ██╔████╔██║███████║██╔██╗ ██║███████║██║  ███╗█████╗  ██████╔╝",
-		"                    ██║╚██╔╝██║██╔══██║██║╚██╗██║██╔══██║██║   ██║██╔══╝  ██╔══██╗",
-		"                    ██║ ╚═╝ ██║██║  ██║██║ ╚████║██║  ██║╚██████╔╝███████╗██║  ██║",
-		"                    ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝",
-	}
-
+	// Compact logo with consistent theme
 	logoBox := lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
+		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#0EA5E9")).
-		Padding(1, 2).
+		Foreground(lipgloss.Color("#0EA5E9")).
+		Padding(0, 2).
 		Align(lipgloss.Center).
-		Foreground(lipgloss.Color("#0EA5E9"))
+		Bold(true)
 
 	// Render logo
-	b.WriteString(logoBox.Render(strings.Join(logo, "\n")))
+	b.WriteString(logoBox.Render("🎯 FLUTTER PACKAGE MANAGER"))
 	b.WriteString("\n\n")
 
 	// Status message
 	if m.checking {
-		// Show progress bar and current check
-		b.WriteString(m.renderProgressBar())
-		b.WriteString("\n\n")
-
 		// Show what we're currently checking
 		if m.currentCheck != "" {
 			checkMsg := fmt.Sprintf("Checking Prerequisite: %s  %d of %d",
 				m.titleStyle.Render(m.currentCheck), m.currentIndex, m.totalChecks)
-			b.WriteString(lipgloss.NewStyle().Align(lipgloss.Center).Width(86).Render(checkMsg))
+			b.WriteString(lipgloss.NewStyle().Align(lipgloss.Center).Render(checkMsg))
 		} else {
 			checkMsg := "Initializing prerequisite checks..."
-			b.WriteString(lipgloss.NewStyle().Align(lipgloss.Center).Width(86).Render(m.statusStyle.Render(checkMsg)))
+			b.WriteString(lipgloss.NewStyle().Align(lipgloss.Center).Render(m.statusStyle.Render(checkMsg)))
 		}
+		b.WriteString("\n\n")
+
+		// Show smooth animated progress bar with spring physics
+		b.WriteString(lipgloss.NewStyle().Align(lipgloss.Center).Render(m.progress.View()))
 		b.WriteString("\n\n")
 	} else if m.checkComplete {
 		if m.checkResult.AllMet {
@@ -272,59 +267,6 @@ func (m *SplashScreenModel) View() string {
 	b.WriteString(m.subtitleStyle.Render("q: quit"))
 
 	return b.String()
-}
-
-// renderProgressBar renders an animated progress bar
-func (m *SplashScreenModel) renderProgressBar() string {
-	width := 60 // Progress bar width
-
-	// Calculate progress percentage
-	var progress float64
-	if m.totalChecks > 0 {
-		progress = float64(m.currentIndex) / float64(m.totalChecks)
-	}
-
-	filled := int(progress * float64(width))
-
-	// Animation: make the progress bar pulse
-	animChars := []rune{'▓', '▒', '░'}
-	animChar := animChars[m.frame%len(animChars)]
-
-	// Build the progress bar
-	var bar strings.Builder
-	bar.WriteString("╔")
-	bar.WriteString(strings.Repeat("═", width+2))
-	bar.WriteString("╗\n")
-	bar.WriteString("║ ")
-
-	// Filled portion
-	for i := 0; i < filled; i++ {
-		bar.WriteRune('█')
-	}
-
-	// Current position (animated)
-	if filled < width && m.checking {
-		bar.WriteRune(animChar)
-		filled++
-	}
-
-	// Empty portion
-	for i := filled; i < width; i++ {
-		bar.WriteRune(' ')
-	}
-
-	bar.WriteString(" ║\n")
-	bar.WriteString("╚")
-	bar.WriteString(strings.Repeat("═", width+2))
-	bar.WriteString("╝")
-
-	// Center the progress bar
-	result := lipgloss.NewStyle().
-		Align(lipgloss.Center).
-		Width(86).
-		Render(m.progressStyle.Render(bar.String()))
-
-	return result
 }
 
 // renderDetailedResults renders detailed prerequisite check results
