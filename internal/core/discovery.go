@@ -70,6 +70,54 @@ func NearestPubspec(startDir string) (*Project, error) {
 	return nil, fmt.Errorf("no pubspec.yaml found in %s or parent directories", startDir)
 }
 
+// FindPubspecNearCurrent searches for pubspec.yaml within +-3 levels from the current directory
+// This matches the shell script behavior for detecting local Flutter projects
+// It searches:
+// - 3 levels up from current directory
+// - Current directory
+// - 3 levels down from current directory
+func FindPubspecNearCurrent() (*Project, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	// First, try walking UP the tree (up to 3 levels)
+	current := cwd
+	root := filepath.VolumeName(current) + string(filepath.Separator)
+
+	for i := 0; i <= 3; i++ {
+		pubspecPath := filepath.Join(current, "pubspec.yaml")
+		if _, err := os.Stat(pubspecPath); err == nil {
+			// Found pubspec.yaml
+			project := &Project{
+				Path:        current,
+				PubspecPath: pubspecPath,
+			}
+			if name, err := extractProjectName(pubspecPath); err == nil {
+				project.Name = name
+			}
+			return project, nil
+		}
+
+		// Move up one directory
+		parent := filepath.Dir(current)
+		if parent == current || parent == root {
+			break // Reached the root
+		}
+		current = parent
+	}
+
+	// If not found above, search DOWN from current directory (up to 3 levels)
+	projects, err := scanDirectoryForProjectsWithContext(context.Background(), cwd, 3)
+	if err == nil && len(projects) > 0 {
+		// Return the first project found
+		return &projects[0], nil
+	}
+
+	return nil, fmt.Errorf("no pubspec.yaml found within +-3 levels of %s", cwd)
+}
+
 // ScanCommonRoots scans common development directories for Flutter projects
 // This mirrors the shell script's local project discovery with concurrent scanning and proper cleanup
 func ScanCommonRoots() ([]Project, error) {

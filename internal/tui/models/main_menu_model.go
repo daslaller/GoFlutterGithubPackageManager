@@ -46,12 +46,63 @@ type MenuOption struct {
 	action      AppScreen
 }
 
-var menuOptions = []MenuOption{
-	{"🔧 Check prerequisites", "Verify required tools (git, dart/flutter, gh) are installed", ScreenPrerequisites},
-	{"🐙 GitHub repo", "Browse and select packages from GitHub repositories", ScreenGitHubRepo},
-	{"⚙️ Configure search", "Set up search filters and preferences", ScreenSearchConfig},
-	{"📁 Update local package", "Scan and update packages in current Flutter project", ScreenScanDirectories},
-	{"🔄 Check for Flutter-PM updates", "Update Flutter Package Manager to latest version", ScreenSelfUpdate},
+// getMenuOptions returns the menu options, conditionally including local project option
+func (m *MainMenuModel) getMenuOptions() []MenuOption {
+	var options []MenuOption
+
+	// Option 1: Add packages to local project (if detected)
+	if m.shared.LocalPubspecAvailable {
+		options = append(options, MenuOption{
+			fmt.Sprintf("📦 Add package to local - (%s)", m.shared.DetectedProject),
+			fmt.Sprintf("Add Git packages to local project: %s", m.shared.DetectedProject),
+			ScreenDependencySelection, // Will add packages to detected project
+		})
+	}
+
+	// Option 2 (or 1 if no local): Check prerequisites
+	options = append(options, MenuOption{
+		"🔧 Check prerequisites",
+		"Verify required tools (git, dart/flutter, gh) are installed",
+		ScreenPrerequisites,
+	})
+
+	// Option 3 (or 2): GitHub repo
+	options = append(options, MenuOption{
+		"🐙 GitHub repo",
+		"Browse and select packages from GitHub repositories",
+		ScreenGitHubRepo,
+	})
+
+	// Option 4 (or 3): Configure search
+	options = append(options, MenuOption{
+		"⚙️ Configure search",
+		"Set up search filters and preferences",
+		ScreenSearchConfig,
+	})
+
+	// Option 5 (or 4): Update local package - show project name or greyed out
+	var updateTitle, updateDesc string
+	if m.shared.LocalPubspecAvailable {
+		updateTitle = fmt.Sprintf("📁 Flutter package update - (%s)", m.shared.DetectedProject)
+		updateDesc = fmt.Sprintf("Update stale packages in %s", m.shared.DetectedProject)
+	} else {
+		updateTitle = "📁 Flutter package update - (none found)"
+		updateDesc = "No local Flutter project detected within +-3 levels"
+	}
+	options = append(options, MenuOption{
+		updateTitle,
+		updateDesc,
+		ScreenScanDirectories,
+	})
+
+	// Option 6 (or 5): Self-update
+	options = append(options, MenuOption{
+		"🔄 Check for Flutter-PM updates",
+		"Update Flutter Package Manager to latest version",
+		ScreenSelfUpdate,
+	})
+
+	return options
 }
 
 // timerTickMsg represents a timer tick
@@ -148,26 +199,40 @@ func (m *MainMenuModel) View() string {
 	m.menuLines = append(m.menuLines, "")
 	m.menuLines = append(m.menuLines, "📱 Flutter Package Manager - Main Menu:")
 
+	// Get dynamic menu options
+	options := m.getMenuOptions()
+
 	// Menu options with optimized string building
-	for i, option := range menuOptions {
+	// Determine which option is the "update" option for greying out
+	updateOptionIndex := -1
+	if m.shared.LocalPubspecAvailable {
+		updateOptionIndex = 4 // Option 5 when local project exists
+	} else {
+		updateOptionIndex = 3 // Option 4 when no local project
+	}
+
+	for i, option := range options {
 		var line string
+		// Check if this is the update option and no project found
+		isDisabled := (i == updateOptionIndex && !m.shared.LocalPubspecAvailable)
+
 		if c == i {
 			line = "► " + strconv.Itoa(i+1) + ". " + option.title
-			line = m.checkboxStyle.Render(line)
+			if isDisabled {
+				line = m.subtleStyle.Render(line) // Grey out disabled option
+			} else {
+				line = m.checkboxStyle.Render(line)
+			}
 		} else {
 			line = "  " + strconv.Itoa(i+1) + ". " + option.title
+			if isDisabled {
+				line = m.subtleStyle.Render(line) // Grey out disabled option
+			}
 		}
 		m.menuLines = append(m.menuLines, line)
 	}
 
 	m.menuLines = append(m.menuLines, "")
-
-	// Detected project info (placeholder for now)
-	if m.shared.LocalPubspecAvailable {
-		detectedText := "💡 Detected Flutter project: " + m.shared.DetectedProject
-		m.menuLines = append(m.menuLines, m.subtleStyle.Render(detectedText))
-		m.menuLines = append(m.menuLines, "")
-	}
 
 	// Timeout info with pre-computed string
 	timeoutText := "Program quits in " + m.ticksStyle.Render(strconv.Itoa(m.menuTimeout)) + " seconds"
@@ -191,6 +256,8 @@ func (m *MainMenuModel) View() string {
 
 // handleKeys handles keyboard input
 func (m *MainMenuModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	options := m.getMenuOptions()
+
 	switch msg.String() {
 	case "q", "ctrl+c", "esc":
 		m.quitting = true
@@ -198,8 +265,8 @@ func (m *MainMenuModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "j", "down":
 		m.choice++
-		if m.choice >= len(menuOptions) {
-			m.choice = len(menuOptions) - 1
+		if m.choice >= len(options) {
+			m.choice = len(options) - 1
 		}
 		return m, nil
 
@@ -213,21 +280,13 @@ func (m *MainMenuModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.selectCurrentChoice()
 
-	case "1":
-		m.choice = 0
-		return m.selectCurrentChoice()
-
-	case "2":
-		m.choice = 1
-		return m.selectCurrentChoice()
-
-	case "3":
-		m.choice = 2
-		return m.selectCurrentChoice()
-
-	case "4":
-		m.choice = 3
-		return m.selectCurrentChoice()
+	case "1", "2", "3", "4", "5", "6":
+		// Handle number selection dynamically
+		num := int(msg.String()[0] - '0')
+		if num > 0 && num <= len(options) {
+			m.choice = num - 1
+			return m.selectCurrentChoice()
+		}
 	}
 
 	return m, nil
@@ -235,8 +294,10 @@ func (m *MainMenuModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // selectCurrentChoice handles selection of the current menu item
 func (m *MainMenuModel) selectCurrentChoice() (tea.Model, tea.Cmd) {
-	if m.choice >= 0 && m.choice < len(menuOptions) {
-		selectedOption := menuOptions[m.choice]
+	options := m.getMenuOptions()
+
+	if m.choice >= 0 && m.choice < len(options) {
+		selectedOption := options[m.choice]
 		m.shared.ProjectSourceChoice = m.choice + 1 // Convert to 1-based for shell script compatibility
 
 		// Log the selection

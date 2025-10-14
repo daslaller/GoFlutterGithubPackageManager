@@ -153,6 +153,18 @@ func (m *SplashScreenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logger.Info("splash", fmt.Sprintf("Missing prerequisites: %v", msg.result.Missing))
 		}
 
+		// Detect local Flutter project within +-3 levels
+		if project, err := core.FindPubspecNearCurrent(); err == nil {
+			m.shared.LocalPubspecAvailable = true
+			m.shared.DetectedProject = project.Name
+			m.shared.DetectedPubspecPath = project.PubspecPath
+			m.shared.SourceProjectPath = project.Path
+			m.logger.Info("splash", fmt.Sprintf("Detected local Flutter project: %s at %s", project.Name, project.Path))
+		} else {
+			m.shared.LocalPubspecAvailable = false
+			m.logger.Info("splash", "No local Flutter project detected within +-3 levels")
+		}
+
 		// Auto-transition to main menu after delay
 		if m.autoTransition {
 			return m, tea.Tick(time.Duration(m.transitionDelay)*time.Second, func(time.Time) tea.Msg {
