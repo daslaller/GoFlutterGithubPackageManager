@@ -59,11 +59,11 @@ func (m *MainMenuModel) getMenuOptions() []MenuOption {
 		})
 	}
 
-	// Option 2 (or 1 if no local): Check prerequisites
+	// Option 2 (or 1 if no local): Search local Flutter sources
 	options = append(options, MenuOption{
-		"🔧 Check prerequisites",
-		"Verify required tools (git, dart/flutter, gh) are installed",
-		ScreenPrerequisites,
+		"📁 Search local Flutter sources",
+		"Scan for Flutter projects in local directories and select one",
+		ScreenScanDirectories,
 	})
 
 	// Option 3 (or 2): GitHub repo
@@ -80,19 +80,19 @@ func (m *MainMenuModel) getMenuOptions() []MenuOption {
 		ScreenSearchConfig,
 	})
 
-	// Option 5 (or 4): Update local package - show project name or greyed out
+	// Option 5 (or 4): Update stale packages - show project name or greyed out
 	var updateTitle, updateDesc string
 	if m.shared.LocalPubspecAvailable {
-		updateTitle = fmt.Sprintf("📁 Flutter package update - (%s)", m.shared.DetectedProject)
+		updateTitle = fmt.Sprintf("🔄 Update stale packages - (%s)", m.shared.DetectedProject)
 		updateDesc = fmt.Sprintf("Update stale packages in %s", m.shared.DetectedProject)
 	} else {
-		updateTitle = "📁 Flutter package update - (none found)"
+		updateTitle = "🔄 Update stale packages - (none found)"
 		updateDesc = "No local Flutter project detected within +-3 levels"
 	}
 	options = append(options, MenuOption{
 		updateTitle,
 		updateDesc,
-		ScreenScanDirectories,
+		ScreenForceUpdate, // Changed to force update screen
 	})
 
 	// Option 6 (or 5): Self-update

@@ -145,12 +145,43 @@ func (m *ScanDirectoriesModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // scanForProjects scans for Flutter projects in common directories
 func (m *ScanDirectoriesModel) scanForProjects() tea.Cmd {
 	return func() tea.Msg {
-		// Mock implementation for now - in real implementation would call core.ScanDirectories()
-		projects := []core.Project{
-			{Path: "/example/flutter_project1", Name: "flutter_project1", PubspecPath: "/example/flutter_project1/pubspec.yaml"},
-			{Path: "/example/flutter_project2", Name: "flutter_project2", PubspecPath: "/example/flutter_project2/pubspec.yaml"},
+		m.logger.Info("scan_directories", "Starting directory scan for Flutter projects")
+
+		// Check if local project was detected - use that first
+		if m.shared.LocalPubspecAvailable && m.shared.SourceProjectPath != "" {
+			m.logger.Info("scan_directories", fmt.Sprintf("Using detected local project: %s", m.shared.DetectedProject))
+			project := core.Project{
+				Path:        m.shared.SourceProjectPath,
+				Name:        m.shared.DetectedProject,
+				PubspecPath: m.shared.DetectedPubspecPath,
+			}
+			return scanCompleteMsg{
+				projects: []core.Project{project},
+				err:      nil,
+			}
 		}
 
+		// Otherwise, scan for projects within +-3 levels from current directory
+		if project, err := core.FindPubspecNearCurrent(); err == nil {
+			m.logger.Info("scan_directories", fmt.Sprintf("Found project within +-3 levels: %s", project.Name))
+			return scanCompleteMsg{
+				projects: []core.Project{*project},
+				err:      nil,
+			}
+		}
+
+		// If nothing found nearby, scan common roots
+		m.logger.Info("scan_directories", "Scanning common development directories")
+		projects, err := core.ScanCommonRoots()
+		if err != nil {
+			m.logger.Error("scan_directories", fmt.Errorf("scan failed: %w", err))
+			return scanCompleteMsg{
+				projects: nil,
+				err:      err,
+			}
+		}
+
+		m.logger.Info("scan_directories", fmt.Sprintf("Scan complete: found %d projects", len(projects)))
 		return scanCompleteMsg{
 			projects: projects,
 			err:      nil,
