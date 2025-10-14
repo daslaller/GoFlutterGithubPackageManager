@@ -137,11 +137,16 @@ func (m *ExecutionModel) Init() tea.Cmd {
 	if m.shared.SourceRepo != nil && m.shared.SourceProject != nil {
 		// This is the GitHub source clone flow
 		// Log the information about what needs to be done
-		m.logger.Info("execution", fmt.Sprintf("Source clone flow: %s to %s/%s",
-			m.shared.SourceRepo.URL,
-			m.shared.SourceProject.Path,
-			m.shared.SourceProject.Name))
-		m.logger.Info("execution", "Note: Full source cloning implementation pending")
+		m.logger.Info("execution", fmt.Sprintf("=== SOURCE CLONE FLOW DETECTED ==="))
+		m.logger.Info("execution", fmt.Sprintf("  Repository: %s", m.shared.SourceRepo.Name))
+		m.logger.Info("execution", fmt.Sprintf("  URL: %s", m.shared.SourceRepo.URL))
+		m.logger.Info("execution", fmt.Sprintf("  Target Path: %s", m.shared.SourceProject.Path))
+		m.logger.Info("execution", fmt.Sprintf("  Project Name: %s", m.shared.SourceProject.Name))
+		m.logger.Info("execution", fmt.Sprintf("  Total Steps: %d", m.totalSteps))
+	} else {
+		m.logger.Info("execution", "=== PACKAGE INSTALLATION FLOW ===")
+		m.logger.Info("execution", fmt.Sprintf("  Packages: %d", len(m.shared.PackageSpecs)))
+		m.logger.Info("execution", fmt.Sprintf("  Total Steps: %d", m.totalSteps))
 	}
 
 	return tea.Batch(
@@ -306,8 +311,11 @@ func (m *ExecutionModel) executeInstallation() tea.Cmd {
 // This function performs REAL operations with detailed error reporting.
 func (m *ExecutionModel) executeNextStep() tea.Cmd {
 	return func() tea.Msg {
+		m.logger.Info("execution", fmt.Sprintf("=== executeNextStep called: currentStep=%d, totalSteps=%d ===", m.currentStep, m.totalSteps))
+
 		// Check if we need to clone source project first (step 1)
 		if m.shared.SourceRepo != nil && m.shared.SourceProject != nil && m.currentStep == 1 {
+			m.logger.Info("execution", ">>> EXECUTING SOURCE CLONE <<<")
 			// Step 1: Clone source project
 			m.logger.Info("execution", fmt.Sprintf("Cloning source: %s to %s/%s",
 				m.shared.SourceRepo.URL,
@@ -324,7 +332,7 @@ func (m *ExecutionModel) executeNextStep() tea.Cmd {
 				m.shared.Results = []core.ActionResult{{
 					OK:      false,
 					Message: errMsg,
-					Err:     err,
+					Err:     err.Error(),
 					Logs:    []string{errMsg},
 				}}
 
@@ -389,23 +397,81 @@ func (m *ExecutionModel) executeNextStep() tea.Cmd {
 			}
 		}
 
-		// If we've completed all steps, finalize
-		if m.currentStep >= m.totalSteps {
-			// If no results yet (no source clone), generate placeholder results
-			if len(m.shared.Results) == 0 {
-				results := make([]core.ActionResult, len(m.shared.PackageSpecs))
-				for i, spec := range m.shared.PackageSpecs {
-					results[i] = core.ActionResult{
-						OK:      true,
-						Message: fmt.Sprintf("Configured %s", spec.Name),
-						Data: map[string]interface{}{
-							"package": spec.Name,
-							"url":     spec.URL,
-							"ref":     spec.Ref,
-						},
+		// Add dependencies to pubspec.yaml (step 2+)
+		if m.currentStep > 1 && m.currentStep <= len(m.shared.PackageSpecs)+1 {
+			packageIndex := m.currentStep - 2
+			if packageIndex >= 0 && packageIndex < len(m.shared.PackageSpecs) {
+				spec := m.shared.PackageSpecs[packageIndex]
+
+				m.logger.Info("execution", fmt.Sprintf(">>> ADDING DEPENDENCY: %s <<<", spec.Name))
+
+				// Determine project path
+				projectPath := m.shared.SourceProjectPath
+				if projectPath == "" && m.shared.SourceProject != nil {
+					projectPath = filepath.Join(m.shared.SourceProject.Path, m.shared.SourceProject.Name)
+				}
+				if projectPath == "" {
+					projectPath = "." // Default to current directory
+				}
+
+				absProjectPath, _ := filepath.Abs(projectPath)
+				m.logger.Info("execution", fmt.Sprintf("  Adding to project: %s", absProjectPath))
+				m.logger.Info("execution", fmt.Sprintf("  Package: %s", spec.Name))
+				m.logger.Info("execution", fmt.Sprintf("  URL: %s", spec.URL))
+				m.logger.Info("execution", fmt.Sprintf("  Ref: %s", spec.Ref))
+
+				// Add the dependency using core.AddGitDependency
+				result := core.AddGitDependency(m.logger, &m.cfg, projectPath, spec)
+
+				if !result.OK {
+					m.logger.Info("execution", fmt.Sprintf("Failed to add %s: %s", spec.Name, result.Err))
+
+					// Store failure
+					if len(m.shared.Results) == 0 {
+						m.shared.Results = []core.ActionResult{result}
+					} else {
+						m.shared.Results = append(m.shared.Results, result)
+					}
+
+					return executionStepMsg{
+						step:     m.currentStep + 1,
+						stepName: fmt.Sprintf("Failed: %s", spec.Name),
+						err:      fmt.Errorf("failed to add %s: %s", spec.Name, result.Err),
 					}
 				}
-				m.shared.Results = results
+
+				m.logger.Info("execution", fmt.Sprintf("Successfully added %s", spec.Name))
+
+				// Store success
+				result.Data = map[string]interface{}{
+					"package":     spec.Name,
+					"url":         spec.URL,
+					"ref":         spec.Ref,
+					"projectPath": absProjectPath,
+				}
+
+				if len(m.shared.Results) == 0 {
+					m.shared.Results = []core.ActionResult{result}
+				} else {
+					m.shared.Results = append(m.shared.Results, result)
+				}
+
+				return executionStepMsg{
+					step:     m.currentStep + 1,
+					stepName: fmt.Sprintf("Added %s", spec.Name),
+					err:      nil,
+				}
+			}
+		}
+
+		// If we've completed all steps, finalize
+		if m.currentStep >= m.totalSteps {
+			// Ensure we have results
+			if len(m.shared.Results) == 0 {
+				m.shared.Results = []core.ActionResult{{
+					OK:      true,
+					Message: "No operations performed",
+				}}
 			}
 
 			return executionCompleteMsg{
