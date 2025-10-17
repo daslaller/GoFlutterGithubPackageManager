@@ -20,24 +20,28 @@ type ScanDirectoriesModel struct {
 	shared *AppState
 
 	// State
-	scanning bool
-	projects []core.Project
-	complete bool
-	quitting bool
+	scanning      bool
+	projects      []core.Project
+	complete      bool
+	quitting      bool
+	selectedIndex int // Currently selected project index
 
 	// Styles
-	headerStyle  lipgloss.Style
-	successStyle lipgloss.Style
-	errorStyle   lipgloss.Style
+	headerStyle   lipgloss.Style
+	successStyle  lipgloss.Style
+	errorStyle    lipgloss.Style
+	selectedStyle lipgloss.Style
+	normalStyle   lipgloss.Style
 }
 
 // NewScanDirectoriesModel creates a new scan directories model
 func NewScanDirectoriesModel(cfg core.Config, logger *core.Logger, shared *AppState) *ScanDirectoriesModel {
 	return &ScanDirectoriesModel{
-		cfg:      cfg,
-		logger:   logger,
-		shared:   shared,
-		scanning: true,
+		cfg:           cfg,
+		logger:        logger,
+		shared:        shared,
+		scanning:      true,
+		selectedIndex: 0,
 
 		// Styles
 		headerStyle: lipgloss.NewStyle().
@@ -51,6 +55,14 @@ func NewScanDirectoriesModel(cfg core.Config, logger *core.Logger, shared *AppSt
 		errorStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("196")).
 			Bold(true),
+
+		selectedStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(lipgloss.Color("#0EA5E9")).
+			Padding(0, 1),
+
+		normalStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241")),
 	}
 }
 
@@ -113,17 +125,34 @@ func (m *ScanDirectoriesModel) View() string {
 		return m.errorStyle.Render("❌ No Flutter Projects Found") + "\n\nNo Flutter projects were found in common directories.\n\nPress Enter to return to main menu or Q to quit."
 	}
 
-	content := m.successStyle.Render(fmt.Sprintf("✅ Found %d Flutter Projects", len(m.projects))) + "\n\n"
+	var content string
+
+	// Single project - auto-select it
+	if len(m.projects) == 1 {
+		content = m.successStyle.Render("✅ Found 1 Flutter Project") + "\n\n"
+		content += fmt.Sprintf("  %s\n\n", m.projects[0].Path)
+		content += "Press Enter to use this project or Q to return to main menu"
+		return content
+	}
+
+	// Multiple projects - let user select
+	content = m.successStyle.Render(fmt.Sprintf("✅ Found %d Flutter Projects", len(m.projects))) + "\n\n"
 
 	for i, project := range m.projects {
-		content += fmt.Sprintf("%d. %s\n", i+1, project.Path)
+		projectText := fmt.Sprintf("%d. %s", i+1, project.Path)
+		if i == m.selectedIndex {
+			content += m.selectedStyle.Render("▶ "+projectText) + "\n"
+		} else {
+			content += m.normalStyle.Render("  "+projectText) + "\n"
+		}
+
 		if i >= 9 { // Limit display to first 10
 			content += fmt.Sprintf("... and %d more\n", len(m.projects)-10)
 			break
 		}
 	}
 
-	content += "\nPress Enter to continue or Q to return to main menu"
+	content += "\n↑/↓ or j/k: navigate • Enter: select project • Q: back to menu"
 	return content
 }
 
@@ -133,10 +162,40 @@ func (m *ScanDirectoriesModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		return m, TransitionToScreen(ScreenMainMenu)
 
+	case "up", "k":
+		if len(m.projects) > 1 {
+			m.selectedIndex--
+			if m.selectedIndex < 0 {
+				m.selectedIndex = len(m.projects) - 1
+			}
+		}
+		return m, nil
+
+	case "down", "j":
+		if len(m.projects) > 1 {
+			m.selectedIndex++
+			if m.selectedIndex >= len(m.projects) {
+				m.selectedIndex = 0
+			}
+		}
+		return m, nil
+
 	case "enter":
-		// For now, just return to main menu
-		// TODO: Implement project selection if multiple projects found
-		return m, TransitionToScreen(ScreenMainMenu)
+		// Select the current project and save to shared state
+		if len(m.projects) > 0 && m.selectedIndex >= 0 && m.selectedIndex < len(m.projects) {
+			selectedProject := m.projects[m.selectedIndex]
+			m.shared.SourceProject = &selectedProject
+			m.shared.SourceProjectPath = selectedProject.Path
+			m.shared.DetectedPubspecPath = selectedProject.PubspecPath
+			m.shared.DetectedProject = selectedProject.Name
+			m.shared.LocalPubspecAvailable = true
+
+			m.logger.Info("scan_directories", fmt.Sprintf("Selected project: %s at %s", selectedProject.Name, selectedProject.Path))
+
+			// Return to main menu with selected project
+			return m, TransitionToScreen(ScreenMainMenu)
+		}
+		return m, nil
 	}
 
 	return m, nil

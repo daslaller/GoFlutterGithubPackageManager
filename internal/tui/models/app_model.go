@@ -97,6 +97,11 @@ type AppState struct {
 
 	// User choices
 	ProjectSourceChoice int // 1-6 from shell script menu
+
+	// Search configuration (used by scan_directories)
+	SearchPaths    []string // Custom search paths configured by user
+	SearchDepth    int      // Directory search depth (levels)
+	FullDiskSearch bool     // Whether to perform full disk search
 }
 
 // ScreenTransitionMsg is sent when we need to change screens

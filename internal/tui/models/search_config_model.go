@@ -309,13 +309,13 @@ func (m *SearchConfigModel) selectCurrentOption() (tea.Model, tea.Cmd) {
 
 // saveSettings saves the search configuration settings
 func (m *SearchConfigModel) saveSettings() {
-	m.logger.Info("search_config", fmt.Sprintf("Saved search settings: paths=%v, depth=%d, fullSearch=%t",
-		m.searchPaths, m.searchDepth, m.fullDiskSearch))
+	// Store settings in shared state for use by directory scanning
+	m.shared.SearchPaths = m.searchPaths
+	m.shared.SearchDepth = m.searchDepth
+	m.shared.FullDiskSearch = m.fullDiskSearch
 
-	// TODO: Store these settings in shared state for use by directory scanning
-	// m.shared.SearchPaths = m.searchPaths
-	// m.shared.SearchDepth = m.searchDepth
-	// m.shared.FullDiskSearch = m.fullDiskSearch
+	m.logger.Info("search_config", fmt.Sprintf("Saved search settings to AppState: paths=%v, depth=%d, fullSearch=%t",
+		m.searchPaths, m.searchDepth, m.fullDiskSearch))
 }
 
 // parseDepth parses a depth string to integer, returns 0 if invalid
