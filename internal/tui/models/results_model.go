@@ -172,24 +172,44 @@ func (m *ResultsModel) updateContent() {
 		return
 	}
 
-	// Results summary
+	// Results summary with conflict resolution tracking
 	successCount := 0
 	errorCount := 0
+	conflictCount := 0
 	for _, result := range m.shared.Results {
 		if result.OK {
 			successCount++
+			// Check if this was a conflict resolution
+			if result.Data != nil {
+				if conflictResolved, ok := result.Data["conflict_resolved"].(bool); ok && conflictResolved {
+					conflictCount++
+				}
+			}
 		} else {
 			errorCount++
 		}
 	}
 
 	if errorCount == 0 {
-		content.WriteString(m.successStyle.Render("✅ All Packages Installed Successfully!") + "\n\n")
+		if conflictCount > 0 {
+			content.WriteString(m.successStyle.Render("✅ All Packages Installed Successfully!") + "\n")
+			content.WriteString(m.warningStyle.Render(fmt.Sprintf("🔧 %d conflict(s) automatically resolved", conflictCount)) + "\n\n")
+		} else {
+			content.WriteString(m.successStyle.Render("✅ All Packages Installed Successfully!") + "\n\n")
+		}
 	} else {
-		content.WriteString(m.errorStyle.Render(fmt.Sprintf("⚠️  %d Errors, %d Successful", errorCount, successCount)) + "\n\n")
+		if conflictCount > 0 {
+			content.WriteString(m.errorStyle.Render(fmt.Sprintf("⚠️  %d Errors, %d Successful (%d conflicts resolved)", errorCount, successCount, conflictCount)) + "\n\n")
+		} else {
+			content.WriteString(m.errorStyle.Render(fmt.Sprintf("⚠️  %d Errors, %d Successful", errorCount, successCount)) + "\n\n")
+		}
 	}
 
-	content.WriteString(fmt.Sprintf("Total packages processed: %d\n\n", len(m.shared.Results)))
+	content.WriteString(fmt.Sprintf("Total packages processed: %d\n", len(m.shared.Results)))
+	if conflictCount > 0 {
+		content.WriteString(fmt.Sprintf("Dependency conflicts resolved: %d\n", conflictCount))
+	}
+	content.WriteString("\n")
 
 	// Detailed results
 	content.WriteString(m.headerStyle.Render("Detailed Results:") + "\n\n")
@@ -210,7 +230,7 @@ func (m *ResultsModel) updateContent() {
 			content.WriteString(m.errorStyle.Render(fmt.Sprintf("   Error: %s", result.Err)) + "\n")
 		}
 
-		// Package data
+		// Package data and conflict resolution details
 		if result.Data != nil {
 			if pkg, ok := result.Data["package"].(string); ok {
 				content.WriteString(fmt.Sprintf("   Package: %s\n", pkg))
@@ -220,6 +240,33 @@ func (m *ResultsModel) updateContent() {
 			}
 			if ref, ok := result.Data["ref"].(string); ok {
 				content.WriteString(fmt.Sprintf("   Ref: %s\n", ref))
+			}
+
+			// Show conflict resolution details if applicable
+			if conflictResolved, ok := result.Data["conflict_resolved"].(bool); ok && conflictResolved {
+				content.WriteString(m.warningStyle.Render("   🔧 Conflict Resolution Applied:") + "\n")
+
+				if conflictType, ok := result.Data["conflict_type"].(string); ok {
+					content.WriteString(fmt.Sprintf("   • Conflict Type: %s\n", conflictType))
+				}
+
+				if conflictingPkg, ok := result.Data["conflicting_pkg"].(string); ok && conflictingPkg != "" {
+					content.WriteString(fmt.Sprintf("   • Conflicting Package: %s\n", conflictingPkg))
+				}
+
+				if resolutionMethod, ok := result.Data["resolution_method"].(string); ok {
+					switch resolutionMethod {
+					case "inline_dependency_override":
+						content.WriteString("   • Resolution: Inline dependency override\n")
+						content.WriteString("   • Method: Used dart pub add with override syntax\n")
+					default:
+						content.WriteString(fmt.Sprintf("   • Resolution Method: %s\n", resolutionMethod))
+					}
+				}
+
+				if userMessage, ok := result.Data["user_message"].(string); ok {
+					content.WriteString(m.successStyle.Render(fmt.Sprintf("   • Result: %s", userMessage)) + "\n")
+				}
 			}
 		}
 

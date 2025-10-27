@@ -501,14 +501,20 @@ func resolveWithInlineOverride(logger *Logger, cfg *Config, projectPath string, 
 		}
 	}
 
-	logger.Info("pub", fmt.Sprintf("✅ Conflict resolved using inline dependency override"))
+	logger.Info("pub", fmt.Sprintf("✅ Package %s successfully installed with conflict resolution", actualName))
 
-	// Wait for file locks and return success
+	// Wait for file locks and return success with detailed resolution info
 	time.Sleep(500 * time.Millisecond)
 	return ActionResult{
 		OK:      true,
 		Message: fmt.Sprintf("Successfully added %s with dependency override", actualName),
 		Logs:    logs,
+		Data: map[string]interface{}{
+			"conflict_resolved": true,
+			"conflicting_pkg":   analysis.ConflictingPkg,
+			"resolution_method": "inline_dependency_override",
+			"package_name":      actualName,
+		},
 	}
 }
 
