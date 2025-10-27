@@ -1,4 +1,10 @@
-🔍 Scanning for Flutter Projects...
+⚡ Installing Packages
 
-Please wait while we scan common directories for Flutter projects.
+⣾  Starting installation...
 
+Progress: 0/2 steps
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0%
+
+Installing packages:
+
+Please wait while packages are being installed...

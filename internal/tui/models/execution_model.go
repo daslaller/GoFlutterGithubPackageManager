@@ -37,19 +37,19 @@ import (
 // It orchestrates the multi-step installation process and provides visual indicators
 // for each stage of the operation.
 type ExecutionModel struct {
-	cfg    core.Config // Application configuration
+	cfg    core.Config  // Application configuration
 	logger *core.Logger // Structured logger for operation tracking
 	shared *AppState    // Shared state containing package specs to install
 
 	// Execution state tracking
-	executing   bool            // Whether installation is currently in progress
-	currentStep int             // Current step number (1-based)
-	totalSteps  int             // Total number of steps to complete
-	stepName    string          // Human-readable name of current operation
-	progress    progress.Model  // Animated progress bar (gradient pink to orange)
-	spinner     spinner.Model   // Dot spinner for active operations
-	complete    bool            // Whether installation has finished
-	err         error           // Any error that occurred during execution
+	executing   bool           // Whether installation is currently in progress
+	currentStep int            // Current step number (1-based)
+	totalSteps  int            // Total number of steps to complete
+	stepName    string         // Human-readable name of current operation
+	progress    progress.Model // Animated progress bar (gradient pink to orange)
+	spinner     spinner.Model  // Dot spinner for active operations
+	complete    bool           // Whether installation has finished
+	err         error          // Any error that occurred during execution
 
 	// Lipgloss styles for consistent theming
 	headerStyle  lipgloss.Style // Purple bold header
@@ -70,7 +70,7 @@ type executionStepMsg struct {
 // It contains the results for all packages and any overall error.
 type executionCompleteMsg struct {
 	results []core.ActionResult // Per-package installation results
-	err     error                // Overall execution error, if any
+	err     error               // Overall execution error, if any
 }
 
 // NewExecutionModel creates a new execution screen model.
@@ -372,6 +372,10 @@ func (m *ExecutionModel) executeNextStep() tea.Cmd {
 
 			m.logger.Info("execution", fmt.Sprintf("Source project cloned successfully to: %s", absPath))
 
+			// Set SourceProjectPath for subsequent dependency additions
+			m.shared.SourceProjectPath = targetPath
+			m.logger.Info("execution", fmt.Sprintf("Set SourceProjectPath to: %s", targetPath))
+
 			// Store success in results WITH FULL PATH
 			m.shared.Results = []core.ActionResult{{
 				OK:      true,
@@ -404,6 +408,8 @@ func (m *ExecutionModel) executeNextStep() tea.Cmd {
 				spec := m.shared.PackageSpecs[packageIndex]
 
 				m.logger.Info("execution", fmt.Sprintf(">>> ADDING DEPENDENCY: %s <<<", spec.Name))
+				m.logger.Info("execution", fmt.Sprintf("Package index: %d of %d", packageIndex+1, len(m.shared.PackageSpecs)))
+				m.logger.Info("execution", fmt.Sprintf("Current step: %d of %d", m.currentStep, m.totalSteps))
 
 				// Determine project path
 				projectPath := m.shared.SourceProjectPath
@@ -415,16 +421,31 @@ func (m *ExecutionModel) executeNextStep() tea.Cmd {
 				}
 
 				absProjectPath, _ := filepath.Abs(projectPath)
-				m.logger.Info("execution", fmt.Sprintf("  Adding to project: %s", absProjectPath))
-				m.logger.Info("execution", fmt.Sprintf("  Package: %s", spec.Name))
-				m.logger.Info("execution", fmt.Sprintf("  URL: %s", spec.URL))
-				m.logger.Info("execution", fmt.Sprintf("  Ref: %s", spec.Ref))
+				m.logger.Debug("execution", fmt.Sprintf("  Adding to project: %s", absProjectPath))
+				m.logger.Debug("execution", fmt.Sprintf("  Package: %s", spec.Name))
+				m.logger.Debug("execution", fmt.Sprintf("  URL: %s", spec.URL))
+				m.logger.Debug("execution", fmt.Sprintf("  Ref: %s", spec.Ref))
+
+				// INSTRUMENTATION: Track time between package additions
+				if packageIndex > 0 {
+					m.logger.Debug("execution", "=== TIME SINCE LAST PACKAGE ADDITION ===")
+					m.logger.Debug("execution", fmt.Sprintf("This is package #%d (not the first)", packageIndex+1))
+					m.logger.Debug("execution", "Check logs above for timing of previous package")
+				}
 
 				// Add the dependency using core.AddGitDependency
+				addStartTime := time.Now()
+				m.logger.Debug("execution", fmt.Sprintf("=== STARTING AddGitDependency for %s at %s ===", spec.Name, addStartTime.Format("15:04:05.000")))
+
 				result := core.AddGitDependency(m.logger, &m.cfg, projectPath, spec)
 
+				addEndTime := time.Now()
+				addDuration := addEndTime.Sub(addStartTime)
+				m.logger.Debug("execution", fmt.Sprintf("=== COMPLETED AddGitDependency for %s at %s (duration: %s) ===",
+					spec.Name, addEndTime.Format("15:04:05.000"), addDuration))
+
 				if !result.OK {
-					m.logger.Info("execution", fmt.Sprintf("Failed to add %s: %s", spec.Name, result.Err))
+					m.logger.Debug("execution", fmt.Sprintf("Failed to add %s: %s", spec.Name, result.Err))
 
 					// Store failure
 					if len(m.shared.Results) == 0 {
@@ -440,7 +461,7 @@ func (m *ExecutionModel) executeNextStep() tea.Cmd {
 					}
 				}
 
-				m.logger.Info("execution", fmt.Sprintf("Successfully added %s", spec.Name))
+				m.logger.Debug("execution", fmt.Sprintf("Successfully added %s", spec.Name))
 
 				// Store success
 				result.Data = map[string]interface{}{

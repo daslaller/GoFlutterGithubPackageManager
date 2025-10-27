@@ -25,10 +25,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // GitLsRemoteCache provides caching for git ls-remote operations
@@ -296,6 +300,193 @@ func GetGitVersion() (string, error) {
 		return "", fmt.Errorf("git not available: %w", err)
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+// GitHubPackageNameResult represents the result from gh search code
+type GitHubPackageNameResult struct {
+	Repository struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"repository"`
+	Path        string `json:"path"`
+	TextMatches []struct {
+		Fragment string `json:"fragment"`
+	} `json:"textMatches"`
+}
+
+// FetchPackageNameFromGit fetches the actual package name from a git repository's pubspec.yaml
+// This is critical because the repository name may not match the package name declared in pubspec.yaml
+// For example: repo "my_awesome_repo" might contain package "my_package"
+//
+// Uses a fallback chain for maximum robustness:
+// 1. Primary: GitHub CLI API (works for public and private repos if authenticated)
+// 2. Fallback 1: Direct HTTP GET from raw.githubusercontent.com (public repos only)
+// 3. Fallback 2: Try alternative branch names (main, master, develop)
+// 4. Final fallback: Use repository name as package name
+func FetchPackageNameFromGit(logger *Logger, gitURL string, ref string, subdir string) (string, error) {
+	// Only supports GitHub repos
+	if !strings.Contains(gitURL, "github.com") {
+		return "", fmt.Errorf("non-GitHub repos not yet supported for automatic name detection")
+	}
+
+	// Extract owner/repo from URL
+	// https://github.com/dart-lang/http.git -> dart-lang/http
+	gitURL = strings.TrimSuffix(gitURL, ".git")
+	gitURL = strings.TrimSuffix(gitURL, "/")
+	parts := strings.Split(gitURL, "github.com/")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid GitHub URL format: %s", gitURL)
+	}
+	ownerRepo := strings.TrimSuffix(parts[1], "/")
+	if ownerRepo == "" {
+		return "", fmt.Errorf("invalid GitHub URL format: %s", gitURL)
+	}
+
+	// Build the path to pubspec.yaml
+	pubspecPath := "pubspec.yaml"
+	if subdir != "" {
+		pubspecPath = subdir + "/pubspec.yaml"
+	}
+
+	logger.Debug("git", fmt.Sprintf("Fetching package name from GitHub repo: %s (path: %s)", ownerRepo, pubspecPath))
+
+	// Default branch if ref is empty
+	branch := ref
+	if branch == "" {
+		branch = "main"
+	}
+
+	// METHOD 1: Try gh api (best method - works for public and private repos)
+	if packageName, err := fetchPackageNameViaGhAPI(logger, ownerRepo, pubspecPath); err == nil {
+		logger.Debug("git", fmt.Sprintf("✓ Found package name via gh api: %s", packageName))
+		return packageName, nil
+	} else {
+		logger.Debug("git", fmt.Sprintf("✗ gh api method failed: %s", err.Error()))
+	}
+
+	// METHOD 2: Try raw.githubusercontent.com with specified branch (works for public repos)
+	if packageName, err := fetchPackageNameViaHTTP(logger, ownerRepo, pubspecPath, branch); err == nil {
+		logger.Debug("git", fmt.Sprintf("✓ Found package name via HTTP (branch: %s): %s", branch, packageName))
+		return packageName, nil
+	} else {
+		logger.Debug("git", fmt.Sprintf("✗ HTTP method failed for branch '%s': %s", branch, err.Error()))
+	}
+
+	// METHOD 3: Try alternative branch names if the specified branch failed
+	alternativeBranches := []string{"main", "master", "develop"}
+	for _, altBranch := range alternativeBranches {
+		if altBranch == branch {
+			continue // Skip the branch we already tried
+		}
+		if packageName, err := fetchPackageNameViaHTTP(logger, ownerRepo, pubspecPath, altBranch); err == nil {
+			logger.Debug("git", fmt.Sprintf("✓ Found package name via HTTP (alternative branch: %s): %s", altBranch, packageName))
+			return packageName, nil
+		}
+	}
+
+	// METHOD 4: Final fallback - use repository name
+	repoName := ownerRepo
+	if slashIdx := strings.LastIndex(ownerRepo, "/"); slashIdx != -1 {
+		repoName = ownerRepo[slashIdx+1:]
+	}
+	logger.Debug("git", fmt.Sprintf("⚠ All methods failed, using repository name as package name: %s", repoName))
+	return repoName, nil
+}
+
+// fetchPackageNameViaGhAPI uses GitHub CLI to fetch pubspec.yaml (works for public and private repos)
+func fetchPackageNameViaGhAPI(logger *Logger, ownerRepo string, pubspecPath string) (string, error) {
+	// Build gh api command to fetch pubspec.yaml contents
+	// CRITICAL: This matches the user's exact working command - DO NOT MODIFY THE SYNTAX!
+	// gh api repos/owner/repo/contents/pubspec.yaml --jq ".content | @base64d | split(\"\n\")[] | select(test(\"^name:\")) | sub(\"^name:\\s*\"; \"\")"
+	//
+	// The jq expression (robust version):
+	// 1. Takes the base64-encoded .content field from GitHub API
+	// 2. Decodes it with @base64d
+	// 3. Splits by newline and iterates through ALL lines
+	// 4. Selects lines that match regex ^name: (starts with "name:")
+	// 5. Removes the "name:" prefix and any whitespace after it using sub()
+	args := []string{
+		"api",
+		fmt.Sprintf("repos/%s/contents/%s", ownerRepo, pubspecPath),
+		"--jq", ".content | @base64d | split(\"\\n\")[] | select(test(\"^name:\")) | sub(\"^name:\\\\s*\"; \"\")",
+	}
+
+	logger.Debug("git", fmt.Sprintf("Trying gh api: gh %s", strings.Join(args, " ")))
+
+	cmd := exec.Command("gh", args...)
+	output, err := cmd.Output()
+	if err != nil {
+		// Try to get stderr for better error messages
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr := string(exitErr.Stderr)
+			return "", fmt.Errorf("gh api failed: %s", stderr)
+		}
+		return "", fmt.Errorf("failed to run gh api: %w", err)
+	}
+
+	// The jq expression returns just the package name
+	packageName := strings.TrimSpace(string(output))
+
+	// Remove quotes if present (jq might include them)
+	packageName = strings.Trim(packageName, "\"'")
+
+	if packageName == "" {
+		return "", fmt.Errorf("empty package name returned from gh api")
+	}
+
+	return packageName, nil
+}
+
+// fetchPackageNameViaHTTP fetches pubspec.yaml via raw.githubusercontent.com (public repos only)
+func fetchPackageNameViaHTTP(logger *Logger, ownerRepo string, pubspecPath string, branch string) (string, error) {
+	// Build URL: https://raw.githubusercontent.com/owner/repo/branch/path/to/pubspec.yaml
+	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s", ownerRepo, branch, pubspecPath)
+	logger.Debug("git", fmt.Sprintf("Trying HTTP GET: %s", url))
+
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+	}
+
+	// Read the content
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Parse the package name from pubspec.yaml content
+	packageName := extractPackageNameFromYAML(string(body))
+	if packageName == "" {
+		return "", fmt.Errorf("could not find 'name:' field in pubspec.yaml")
+	}
+
+	return packageName, nil
+}
+
+// extractPackageNameFromYAML extracts the package name from pubspec.yaml content using proper YAML parsing
+func extractPackageNameFromYAML(content string) string {
+	// Define a minimal structure to extract just the name field
+	var pubspec struct {
+		Name string `yaml:"name"`
+	}
+
+	// Parse the YAML content
+	if err := yaml.Unmarshal([]byte(content), &pubspec); err != nil {
+		// If YAML parsing fails, return empty string
+		return ""
+	}
+
+	// Return the extracted name (will be empty string if not found)
+	return strings.TrimSpace(pubspec.Name)
 }
 
 // ValidateGitURL checks if a Git URL is valid and accessible with enhanced security

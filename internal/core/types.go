@@ -32,11 +32,12 @@ type Project struct {
 
 // RepoCandidate represents a GitHub repository that can be added as a dependency
 type RepoCandidate struct {
-	Owner   string `json:"owner"`
-	Name    string `json:"name"`
-	URL     string `json:"url"`
-	Privacy string `json:"privacy"` // "public" or "private"
-	Desc    string `json:"description,omitempty"`
+	Owner       string `json:"owner"`
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	Privacy     string `json:"privacy"` // "public" or "private"
+	Desc        string `json:"description,omitempty"`
+	PackageName string `json:"package_name,omitempty"` // Actual package name from pubspec.yaml (may differ from repo name)
 }
 
 // PkgSpec represents a package specification for adding as a dependency

@@ -25,7 +25,14 @@
       "Bash(go test:*)",
       "Bash(FLUTTER_PM_DEBUG=1 go run . --help)",
       "WebFetch(domain:pkg.go.dev)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(dart:*)",
+      "Bash(flutter:*)",
+      "Bash(where:*)",
+      "Bash(cd:*)",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "WebFetch(domain:dart.dev)"
     ],
     "defaultMode": "acceptEdits"
   }

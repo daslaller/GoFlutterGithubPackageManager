@@ -15,9 +15,63 @@ The project follows a clean architecture pattern with clear separation of concer
 - **types.go**: Data structures and type definitions
 - **discovery.go**: Project and repository discovery logic (matches shell script behavior)
 - **pub.go**: Dart/Flutter pub command integration and pubspec.yaml management
-- **git.go**: Git operations and GitHub CLI integration  
+- **git.go**: Git operations and GitHub CLI integration with robust package name fetching fallback chain
 - **stale.go**: Stale dependency detection and express update functionality
 - **reco.go**: Smart recommendations system
+
+#### Package Name Fetching Strategy (git.go)
+
+The `FetchPackageNameFromGit` function uses a robust fallback chain to fetch the actual package name from a repository's pubspec.yaml. This is critical because repository names often don't match the package name declared in pubspec.yaml (e.g., repo "my_awesome_repo" might contain package "my_package").
+
+**Fallback Chain:**
+1. **Primary Method**: GitHub CLI API (`gh api repos/owner/repo/contents/pubspec.yaml`)
+   - Works for both public and private repositories (if authenticated)
+   - Uses jq to parse base64-encoded content and extract the name field
+   - Most reliable method when gh CLI is available and authenticated
+
+2. **Fallback 1**: Direct HTTP GET from `raw.githubusercontent.com`
+   - Works for public repositories only
+   - No authentication required
+   - Tries the specified branch (ref parameter)
+
+3. **Fallback 2**: Alternative branch names
+   - If the specified branch fails, tries common branches: main, master, develop
+   - Helps handle cases where branch name is incorrect or repository uses different default branch
+
+4. **Final Fallback**: Repository name
+   - If all methods fail, uses the repository name as the package name
+   - Ensures the operation can continue even if package name can't be determined
+
+**YAML Parsing**: Uses `gopkg.in/yaml.v3` for robust YAML parsing, avoiding fragile regex-based parsing. The parser extracts only the `name:` field from pubspec.yaml content.
+
+#### Dependency Conflict Resolution (pub.go)
+
+The `AddGitDependency` function includes intelligent dependency conflict detection and resolution for exit code 65 errors. After solving name mismatch issues, remaining exit code 65 errors are legitimate dependency conflicts that require smart handling.
+
+**Conflict Types Detected:**
+1. **Version Conflicts**: Package A requires dependency X ^1.0.0, Package B requires X ^2.0.0
+   - **Resolution**: Runs `pub get` to attempt automatic version resolution, then retries package addition
+   - **Recoverable**: ✅ Yes
+
+2. **SDK Constraint Violations**: Package requires newer Dart/Flutter SDK than project supports
+   - **Resolution**: None - requires manual SDK update or package version change
+   - **Recoverable**: ❌ No
+
+3. **Platform Incompatibilities**: Package only supports specific platforms (web, mobile, etc.)
+   - **Resolution**: None - requires choosing platform-compatible packages
+   - **Recoverable**: ❌ No
+
+4. **Circular Dependencies**: Package A depends on Package B, Package B depends on Package A
+   - **Resolution**: None - requires removing circular dependency
+   - **Recoverable**: ❌ No
+
+5. **Transitive Conflicts**: Deep dependency chains with incompatible versions
+   - **Resolution**: Runs `pub get` with dependency overrides, then retries
+   - **Recoverable**: ✅ Yes
+
+**Error Analysis**: The system analyzes pub command output using pattern matching to identify specific conflict types and provides meaningful error messages with suggested fixes.
+
+**Automatic Recovery**: For recoverable conflicts (version and transitive), the system automatically attempts resolution by running `pub get` and retrying the package addition without conflict resolution to avoid infinite recursion.
 
 ### TUI Interface (`internal/tui/models/`)
 
@@ -129,7 +183,7 @@ go run . --version
 ./flutter-pm status
 
 # Generate recommendations
-./flutter-pm reco
+./flutter-pm  ##Obsolete
 
 # Show version
 ./flutter-pm --version

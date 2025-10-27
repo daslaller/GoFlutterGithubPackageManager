@@ -30,7 +30,7 @@ import (
 // It manages a collection of text inputs (3 per package) and provides
 // a focused, one-package-at-a-time configuration experience.
 type ConfigurationModel struct {
-	cfg    core.Config // Application configuration
+	cfg    core.Config  // Application configuration
 	logger *core.Logger // Structured logger for tracking user choices
 	shared *AppState    // Shared state containing selected dependencies
 
@@ -41,11 +41,20 @@ type ConfigurationModel struct {
 	inputs       []textinput.Model // Flat array: [pkg0_name, pkg0_ref, pkg0_subdir, pkg1_name, ...]
 	complete     bool              // Whether all packages have been configured
 
+	// Package name fetching state
+	fetchingNames bool   // Whether we're currently fetching package names from git
+	fetchError    string // Error message if fetching failed
+
 	// Lipgloss styles for visual hierarchy
 	headerStyle   lipgloss.Style // Purple bold for headers
 	selectedStyle lipgloss.Style // White on purple background for active field
 	normalStyle   lipgloss.Style // Gray for inactive labels
 	helpStyle     lipgloss.Style // Gray italic for help text
+}
+
+// packageNamesFetchedMsg is sent when package names have been fetched from git repositories
+type packageNamesFetchedMsg struct {
+	err error
 }
 
 // NewConfigurationModel creates a new package configuration wizard.
@@ -85,10 +94,13 @@ func NewConfigurationModel(cfg core.Config, logger *core.Logger, shared *AppStat
 }
 
 // Init initializes the configuration screen by creating and populating all text inputs.
-// Returns textinput.Blink to start the cursor blinking animation.
+// Returns a batch of commands including cursor blink and package name fetching.
 func (m *ConfigurationModel) Init() tea.Cmd {
-	m.setupInputs()
-	return textinput.Blink
+	m.fetchingNames = true
+	return tea.Batch(
+		textinput.Blink,
+		m.fetchPackageNames(),
+	)
 }
 
 // Update handles all messages for the configuration wizard.
@@ -103,12 +115,26 @@ func (m *ConfigurationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case packageNamesFetchedMsg:
+		// Package names have been fetched, now setup inputs with correct names
+		m.fetchingNames = false
+		if msg.err != nil {
+			m.fetchError = msg.err.Error()
+			m.logger.Info("configuration", fmt.Sprintf("Error fetching package names: %s", msg.err))
+		}
+		m.setupInputs()
+		return m, nil
+
 	case tea.KeyMsg:
+		// Don't allow navigation while fetching package names
+		if m.fetchingNames {
+			return m, nil
+		}
 		return m.handleKeys(msg)
 
 	default:
 		// Update current input
-		if m.currentRepo < len(m.shared.SelectedDependencies) && len(m.inputs) > 0 {
+		if !m.fetchingNames && m.currentRepo < len(m.shared.SelectedDependencies) && len(m.inputs) > 0 {
 			inputIndex := m.currentRepo*3 + m.currentField
 			if inputIndex >= 0 && inputIndex < len(m.inputs) {
 				var cmd tea.Cmd
@@ -134,6 +160,13 @@ func (m *ConfigurationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *ConfigurationModel) View() string {
 	if len(m.shared.SelectedDependencies) == 0 {
 		return m.headerStyle.Render("❌ No Repositories Selected") + "\n\nPlease go back and select repositories first.\n\nPress Q to return to main menu"
+	}
+
+	// Show loading message while fetching package names
+	if m.fetchingNames {
+		return m.headerStyle.Render("🔧 Package Configuration") + "\n\n" +
+			"⏳ Fetching actual package names from repositories...\n\n" +
+			m.helpStyle.Render("This ensures the correct package names are used for dart pub add")
 	}
 
 	var b strings.Builder
@@ -245,9 +278,9 @@ func (m *ConfigurationModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // Creates exactly 3 * len(SelectedDependencies) inputs in a flat array.
 //
 // For each package, creates:
-//   1. Name input: Pre-filled with repository name, width 40
-//   2. Ref input: Pre-filled with "main", width 40
-//   3. Subdir input: Empty with "(optional)" placeholder, width 40
+//  1. Name input: Pre-filled with repository name, width 40
+//  2. Ref input: Pre-filled with "main", width 40
+//  3. Subdir input: Empty with "(optional)" placeholder, width 40
 //
 // The first input (name of first package) is automatically focused.
 // If no packages are selected, marks the screen as complete (no-op state).
@@ -264,10 +297,15 @@ func (m *ConfigurationModel) setupInputs() {
 	m.inputs = make([]textinput.Model, totalInputs)
 
 	for i, repo := range m.shared.SelectedDependencies {
-		// Package name input
+		// Package name input - use actual package name if available, otherwise use repo name
+		packageName := repo.PackageName
+		if packageName == "" {
+			packageName = repo.Name
+		}
+
 		nameInput := textinput.New()
-		nameInput.Placeholder = repo.Name
-		nameInput.SetValue(repo.Name)
+		nameInput.Placeholder = packageName
+		nameInput.SetValue(packageName)
 		nameInput.Width = 40
 		m.inputs[i*3] = nameInput
 
@@ -372,4 +410,37 @@ func (m *ConfigurationModel) generatePackageSpecs() {
 
 	m.shared.PackageSpecs = m.packageSpecs
 	m.logger.Info("configuration", fmt.Sprintf("Generated %d package specifications", len(m.packageSpecs)))
+}
+
+// fetchPackageNames fetches the actual package names from git repositories asynchronously
+// This prevents the UI from showing incorrect package names (repo name vs actual package name)
+func (m *ConfigurationModel) fetchPackageNames() tea.Cmd {
+	return func() tea.Msg {
+		m.logger.Info("configuration", "Fetching actual package names from repositories...")
+
+		// Fetch package name for each selected dependency
+		for i := range m.shared.SelectedDependencies {
+			repo := &m.shared.SelectedDependencies[i]
+
+			// Skip if package name is already set
+			if repo.PackageName != "" {
+				m.logger.Info("configuration", fmt.Sprintf("Package name already set for %s: %s", repo.Name, repo.PackageName))
+				continue
+			}
+
+			// Fetch the actual package name from pubspec.yaml
+			packageName, err := core.FetchPackageNameFromGit(m.logger, repo.URL, "main", "")
+			if err != nil {
+				m.logger.Info("configuration", fmt.Sprintf("Failed to fetch package name for %s: %s (will use repo name)", repo.Name, err))
+				// Fallback to repo name - don't fail the entire operation
+				repo.PackageName = repo.Name
+				continue
+			}
+
+			m.logger.Info("configuration", fmt.Sprintf("Fetched package name for %s: %s", repo.Name, packageName))
+			repo.PackageName = packageName
+		}
+
+		return packageNamesFetchedMsg{err: nil}
+	}
 }
