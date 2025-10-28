@@ -320,6 +320,10 @@ func (m *ExecutionModel) View() string {
 		} else if i == m.currentStep-2 {
 			// Currently processing this package
 			status = "🔄"
+			// Check if we're in resolution phase
+			if m.inResolution {
+				statusText = " (resolving conflicts...)"
+			}
 		}
 
 		b.WriteString(fmt.Sprintf("%s %s%s\n", status, spec.Name, statusText))
@@ -497,33 +501,75 @@ func (m *ExecutionModel) executeNextStep() tea.Cmd {
 				}
 
 				if !result.OK {
-					m.logger.Info("execution", fmt.Sprintf("❌ Failed to add %s: %s", spec.Name, result.Err))
-
 					// Check if conflict resolution was attempted
+					conflictAttempted := false
 					if result.Data != nil {
 						if attempted, ok := result.Data["conflict_resolution_attempted"].(bool); ok && attempted {
-							m.logger.Info("execution", "🔧 Conflict resolution was attempted but failed")
+							conflictAttempted = true
 						}
+					}
+
+					if conflictAttempted {
+						m.logger.Info("execution", fmt.Sprintf("❌ Failed to add %s after conflict resolution attempt: %s", spec.Name, result.Err))
+					} else {
+						m.logger.Info("execution", fmt.Sprintf("❌ Failed to add %s: %s", spec.Name, result.Err))
 					}
 
 					// Continue to next package instead of stopping
 					// This allows other packages to be installed even if one fails
+					stepMsg := fmt.Sprintf("Failed: %s", spec.Name)
+					if conflictAttempted {
+						stepMsg = fmt.Sprintf("Failed: %s (after resolution)", spec.Name)
+					}
 					return executionStepMsg{
 						step:     m.currentStep + 1,
-						stepName: fmt.Sprintf("Failed: %s (continuing...)", spec.Name),
+						stepName: stepMsg,
 						err:      nil, // Don't set error - just continue
 					}
 				}
 
-				m.logger.Debug("execution", fmt.Sprintf("Successfully added %s", spec.Name))
+				// Check if conflict was resolved successfully
+				conflictResolved := false
+				if result.Data != nil {
+					if resolved, ok := result.Data["conflict_resolved"].(bool); ok && resolved {
+						conflictResolved = true
+					}
+				}
 
-				// Store success
-				result.Data = map[string]interface{}{
+				if conflictResolved {
+					m.logger.Info("execution", "")
+					m.logger.Info("execution", "═══════════════════════════════════════════════════════════")
+					m.logger.Info("execution", fmt.Sprintf("✅ Successfully added %s", spec.Name))
+					m.logger.Info("execution", "🔧 Conflicts were automatically resolved during installation")
+					m.logger.Info("execution", "═══════════════════════════════════════════════════════════")
+					m.logger.Info("execution", "")
+				} else {
+					m.logger.Debug("execution", fmt.Sprintf("Successfully added %s", spec.Name))
+				}
+
+				// Store success with conflict resolution flag if applicable
+				resultData := map[string]interface{}{
 					"package":     spec.Name,
 					"url":         spec.URL,
 					"ref":         spec.Ref,
 					"projectPath": absProjectPath,
 				}
+				// Preserve conflict_resolved flag if it exists
+				if result.Data != nil {
+					if resolved, ok := result.Data["conflict_resolved"].(bool); ok {
+						resultData["conflict_resolved"] = resolved
+					}
+					if conflictType, ok := result.Data["conflict_type"].(string); ok {
+						resultData["conflict_type"] = conflictType
+					}
+					if conflictingPkg, ok := result.Data["conflicting_pkg"].(string); ok {
+						resultData["conflicting_pkg"] = conflictingPkg
+					}
+					if resolutionMethod, ok := result.Data["resolution_method"].(string); ok {
+						resultData["resolution_method"] = resolutionMethod
+					}
+				}
+				result.Data = resultData
 
 				if len(m.shared.Results) == 0 {
 					m.shared.Results = []core.ActionResult{result}
@@ -531,9 +577,14 @@ func (m *ExecutionModel) executeNextStep() tea.Cmd {
 					m.shared.Results = append(m.shared.Results, result)
 				}
 
+				// Move to next step with clear status message
+				stepMsg := fmt.Sprintf("Added: %s", spec.Name)
+				if conflictResolved {
+					stepMsg = fmt.Sprintf("Added: %s ✓ (conflicts resolved)", spec.Name)
+				}
 				return executionStepMsg{
 					step:     m.currentStep + 1,
-					stepName: fmt.Sprintf("Added %s", spec.Name),
+					stepName: stepMsg,
 					err:      nil,
 				}
 			}
