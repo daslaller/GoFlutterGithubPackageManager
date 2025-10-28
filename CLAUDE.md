@@ -44,6 +44,44 @@ The `FetchPackageNameFromGit` function uses a robust fallback chain to fetch the
 
 **YAML Parsing**: Uses `gopkg.in/yaml.v3` for robust YAML parsing, avoiding fragile regex-based parsing. The parser extracts only the `name:` field from pubspec.yaml content.
 
+#### Dart Pub Inline Git Syntax (pub.go)
+
+**CRITICAL**: The dart pub inline syntax is EXTREMELY strict about formatting. **Spaces after colons are REQUIRED**:
+
+```bash
+dart pub add "package_name:{git:{url: https://github.com/owner/repo.git, ref: branch, path: subdir}, version: any}"
+```
+
+**Format breakdown:**
+- Outer quotes: `"..."` - Wrap the entire package spec (package_name:...)
+- Package spec: `package_name:{git:{...}, version: any}`
+- Git dependency: `{git:{url: ..., ref: ..., path: ...}}`
+- **CRITICAL**: Space after EVERY colon (url: , ref: , path: , version: )
+- `url:` key is **mandatory** before the URL
+- `ref:` is optional (defaults to default branch)
+- `path:` is optional (for monorepos with packages in subdirectories)
+- `version: any` is **required** at the end
+
+**WRONG formats (will fail):**
+```bash
+# Missing spaces after colons
+dart pub add package:"{git:{url:https://..., ref:branch}}"  ❌
+
+# Missing version: any
+dart pub add package:"{git:{url: https://...}}"  ❌
+
+# Quotes in wrong place
+dart pub add package:"{git:{url: https://...}, version: any}"  ❌
+
+# Using --git-url flag (deprecated)
+dart pub add package --git-url https://github.com/owner/repo.git  ❌
+```
+
+**Windows Command Execution:**
+- Uses `SysProcAttr.CmdLine` to bypass Go's exec.Command argument parsing
+- Calls dart/flutter directly (not through cmd.exe) to avoid quote escaping issues
+- The exact command string is passed to the Windows process, which then parses it using its own rules
+
 #### Dependency Conflict Resolution (pub.go)
 
 The `AddGitDependency` function includes intelligent dependency conflict detection and resolution for exit code 65 errors. After solving name mismatch issues, remaining exit code 65 errors are legitimate dependency conflicts that require smart handling.

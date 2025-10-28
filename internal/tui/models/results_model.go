@@ -274,7 +274,9 @@ func (m *ResultsModel) updateContent() {
 		if len(result.Logs) > 0 {
 			content.WriteString("   Logs:\n")
 			for _, log := range result.Logs {
-				content.WriteString(m.codeStyle.Render(fmt.Sprintf("     %s", log)) + "\n")
+				// Don't render with codeStyle to avoid width constraints
+				// Just indent and display the full log
+				content.WriteString(fmt.Sprintf("      %s\n", log))
 			}
 		}
 

@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -69,29 +70,39 @@ func AddGitDependency(logger *Logger, cfg *Config, projectPath string, spec PkgS
 		}
 	}
 
-	// Build command arguments using the actual package name from git
-	args := []string{"pub", "add", actualName, "--git-url", spec.URL}
-
-	if spec.Ref != "" && spec.Ref != "main" {
-		args = append(args, "--git-ref", spec.Ref)
+	// Build command arguments using inline git syntax
+	// Format: "package_name:{git:{url: https://..., ref: branch, path: subdir}, version: any}"
+	// CRITICAL: Spaces after colons are REQUIRED by dart pub
+	gitSpec := fmt.Sprintf(`{git:{url: %s`, spec.URL)
+	if spec.Ref != "" {
+		gitSpec += fmt.Sprintf(`, ref: %s`, spec.Ref)
 	}
-
 	if spec.Subdir != "" {
-		args = append(args, "--git-path", spec.Subdir)
+		gitSpec += fmt.Sprintf(`, path: %s`, spec.Subdir)
 	}
+	gitSpec += fmt.Sprintf(`}, version: any}`)
+
+	// Build the package argument with literal quotes (no escaping)
+	// Format: "package_name:{git:{url: ..., ref: ...}, version: any}"
+	// Note: Quotes wrap the entire package spec, not just package name
+	packageArg := fmt.Sprintf(`"%s:%s"`, actualName, gitSpec)
+	args := []string{"pub", "add", packageArg}
 
 	logger.LogCommand("pub", tool, args)
 
 	// Log the working directory for debugging
 	absPath, _ := filepath.Abs(projectPath)
 	logger.Debug("pub", fmt.Sprintf("Working directory: %s", absPath))
-	logger.Debug("pub", fmt.Sprintf("Full command: %s %s", tool, strings.Join(args, " ")))
+
+	// Build full command string for logging
+	fullCommand := fmt.Sprintf("%s %s", tool, strings.Join(args, " "))
+	logger.Info("pub", fmt.Sprintf("Executing: %s", fullCommand))
 
 	if cfg.DryRun {
 		return ActionResult{
 			OK:      true,
-			Message: fmt.Sprintf("Would execute: %s %s", tool, strings.Join(args, " ")),
-			Logs:    []string{fmt.Sprintf("DRY RUN: %s %s", tool, strings.Join(args, " "))},
+			Message: fmt.Sprintf("Would execute: %s", fullCommand),
+			Logs:    []string{fmt.Sprintf("DRY RUN: %s", fullCommand)},
 		}
 	}
 
@@ -136,8 +147,18 @@ func AddGitDependency(logger *Logger, cfg *Config, projectPath string, spec PkgS
 	startTime := time.Now()
 	logger.Debug("pub", fmt.Sprintf("=== EXECUTING COMMAND at %s ===", startTime.Format("15:04:05.000")))
 
-	// Execute the command
-	cmd := exec.Command(tool, args...)
+	// Execute command directly (not through cmd.exe)
+	// Use SysProcAttr.CmdLine to pass the exact command line, bypassing Go's argument parsing
+	// This is necessary because Windows uses CommandLineToArgvW which doesn't handle the inline git syntax correctly
+	cmdParts := []string{tool}
+	cmdParts = append(cmdParts, args...)
+	cmdStr := strings.Join(cmdParts, " ")
+
+	// Create command with SysProcAttr for direct execution
+	cmd := exec.Command(tool)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CmdLine: cmdStr,
+	}
 	cmd.Dir = projectPath
 
 	// Ensure stdin is closed so the command doesn't wait for input
@@ -145,7 +166,10 @@ func AddGitDependency(logger *Logger, cfg *Config, projectPath string, spec PkgS
 
 	output, err := cmd.CombinedOutput()
 	outputStr := strings.TrimSpace(string(output))
-	logs := []string{outputStr}
+	logs := []string{
+		fmt.Sprintf("Command: %s", fullCommand),
+		fmt.Sprintf("Output: %s", outputStr),
+	}
 
 	// INSTRUMENTATION: Record end time
 	endTime := time.Now()
@@ -190,14 +214,26 @@ func AddGitDependency(logger *Logger, cfg *Config, projectPath string, spec PkgS
 		// If this is a recoverable conflict, try resolution strategies
 		if conflictAnalysis.IsRecoverable {
 			// Notify user about the conflict and that we're working on it
-			logger.Info("pub", fmt.Sprintf("⚠️  Dependency conflict detected while adding %s", actualName))
-			logger.Info("pub", fmt.Sprintf("🔧 Issue: %s", conflictAnalysis.UserMessage))
-			logger.Info("pub", "🔄 Working on automatic resolution... please wait")
+			logger.Info("pub", "")
+			logger.Info("pub", "═══════════════════════════════════════════════════════════")
+			logger.Info("pub", fmt.Sprintf("⚠️  CONFLICT DETECTED: %s", actualName))
+			logger.Info("pub", "═══════════════════════════════════════════════════════════")
+			logger.Info("pub", "")
 
-			// Show what we're trying to do
-			if conflictAnalysis.ConflictingPkg != "" {
-				logger.Info("pub", fmt.Sprintf("📋 Resolving conflict with package: %s", conflictAnalysis.ConflictingPkg))
+			// Show the dart pub error message (truncated for readability)
+			errorLines := strings.Split(outputStr, "\n")
+			logger.Info("pub", "Dart pub error:")
+			maxLines := 10
+			for i, line := range errorLines {
+				if i >= maxLines {
+					logger.Info("pub", "  ... (truncated)")
+					break
+				}
+				if strings.TrimSpace(line) != "" {
+					logger.Info("pub", fmt.Sprintf("  %s", line))
+				}
 			}
+			logger.Info("pub", "")
 
 			// Attempt resolution
 			if resolvedResult := attemptConflictResolution(logger, cfg, projectPath, spec, conflictAnalysis); resolvedResult.OK {
@@ -228,10 +264,11 @@ func AddGitDependency(logger *Logger, cfg *Config, projectPath string, spec PkgS
 			Err:  errDetail,
 			Logs: logs,
 			Data: map[string]interface{}{
-				"conflict_type":  conflictAnalysis.ConflictType,
-				"is_recoverable": conflictAnalysis.IsRecoverable,
-				"suggested_fix":  conflictAnalysis.SuggestedFix,
-				"user_message":   conflictAnalysis.UserMessage,
+				"conflict_type":                 conflictAnalysis.ConflictType,
+				"is_recoverable":                conflictAnalysis.IsRecoverable,
+				"suggested_fix":                 conflictAnalysis.SuggestedFix,
+				"user_message":                  conflictAnalysis.UserMessage,
+				"conflict_resolution_attempted": conflictAnalysis.IsRecoverable, // Flag to indicate we tried to resolve
 			},
 		}
 	}
@@ -447,18 +484,22 @@ func resolveWithInlineOverride(logger *Logger, cfg *Config, projectPath string, 
 	}
 
 	// Build git URL specification for inline syntax
-	gitSpec := fmt.Sprintf("{git: %s", spec.URL)
+	// Format: "package_name:{git:{url: https://..., ref: branch}, version: any}"
+	// CRITICAL: Spaces after colons are REQUIRED
+	gitSpec := fmt.Sprintf(`{git:{url: %s`, spec.URL)
 	if spec.Ref != "" {
-		gitSpec += fmt.Sprintf(", ref: %s", spec.Ref)
+		gitSpec += fmt.Sprintf(`, ref: %s`, spec.Ref)
 	}
 	if spec.Subdir != "" {
-		gitSpec += fmt.Sprintf(", path: %s", spec.Subdir)
+		gitSpec += fmt.Sprintf(`, path: %s`, spec.Subdir)
 	}
-	gitSpec += "}"
+	gitSpec += fmt.Sprintf(`}, version: any}`)
 
 	// Build command with inline dependency override
-	// Format: dart pub add package_name:"git_spec" override:conflicting_package:any
-	args := []string{"pub", "add", fmt.Sprintf("%s:\"%s\"", actualName, gitSpec)}
+	// Format: dart pub add "package_name:{git:{url: ..., ref: ...}, version: any}" override:pkg1:any pkg2:any
+	// Note: Quotes wrap the entire package spec
+	packageArg := fmt.Sprintf(`"%s:%s"`, actualName, gitSpec)
+	args := []string{"pub", "add", packageArg}
 
 	// Add dependency override for the conflicting package
 	if analysis.ConflictingPkg != "" {
@@ -467,12 +508,17 @@ func resolveWithInlineOverride(logger *Logger, cfg *Config, projectPath string, 
 		logger.Info("pub", fmt.Sprintf("📋 Adding dependency override: %s", overrideArg))
 	}
 
+	// Log detailed resolution information for user visibility
+	logger.Info("pub", "")
+	logger.Info("pub", "═══ CONFLICT RESOLUTION ═══")
+	logger.Info("pub", fmt.Sprintf("Resolving conflict (%s): %s", analysis.ConflictType, actualName))
+	logger.Info("pub", fmt.Sprintf("Conflicting package: %s", analysis.ConflictingPkg))
+	logger.Info("pub", "")
+	logger.Info("pub", "Executing command:")
+	logger.Info("pub", fmt.Sprintf("  %s %s", tool, strings.Join(args, " ")))
+	logger.Info("pub", "")
+
 	logger.LogCommand("pub", tool, args)
-	if analysis.ConflictingPkg != "" {
-		logger.Info("pub", fmt.Sprintf("🔧 Applying conflict resolution for %s (conflicting with %s)", actualName, analysis.ConflictingPkg))
-	} else {
-		logger.Info("pub", fmt.Sprintf("🔧 Applying enhanced installation method for %s", actualName))
-	}
 
 	if cfg.DryRun {
 		return ActionResult{
@@ -482,8 +528,16 @@ func resolveWithInlineOverride(logger *Logger, cfg *Config, projectPath string, 
 		}
 	}
 
-	// Execute the command with inline override
-	cmd := exec.Command(tool, args...)
+	// Execute command directly (not through cmd.exe)
+	// Use SysProcAttr.CmdLine to pass the exact command line
+	cmdParts := []string{tool}
+	cmdParts = append(cmdParts, args...)
+	cmdStr := strings.Join(cmdParts, " ")
+
+	cmd := exec.Command(tool)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CmdLine: cmdStr,
+	}
 	cmd.Dir = projectPath
 	cmd.Stdin = nil
 

@@ -42,14 +42,16 @@ type ExecutionModel struct {
 	shared *AppState    // Shared state containing package specs to install
 
 	// Execution state tracking
-	executing   bool           // Whether installation is currently in progress
-	currentStep int            // Current step number (1-based)
-	totalSteps  int            // Total number of steps to complete
-	stepName    string         // Human-readable name of current operation
-	progress    progress.Model // Animated progress bar (gradient pink to orange)
-	spinner     spinner.Model  // Dot spinner for active operations
-	complete    bool           // Whether installation has finished
-	err         error          // Any error that occurred during execution
+	executing      bool           // Whether installation is currently in progress
+	currentStep    int            // Current step number (1-based)
+	totalSteps     int            // Total number of steps to complete
+	stepName       string         // Human-readable name of current operation
+	progress       progress.Model // Animated progress bar (gradient pink to orange)
+	spinner        spinner.Model  // Dot spinner for active operations
+	complete       bool           // Whether installation has finished
+	err            error          // Any error that occurred during execution
+	inResolution   bool           // Whether we're currently in conflict resolution phase
+	resolutionInfo string         // Details about current resolution attempt
 
 	// Lipgloss styles for consistent theming
 	headerStyle  lipgloss.Style // Purple bold header
@@ -251,16 +253,39 @@ func (m *ExecutionModel) View() string {
 	}
 
 	if m.complete {
-		// Success state
-		b.WriteString(m.successStyle.Render("✅ Installation Complete!") + "\n\n")
-		b.WriteString(fmt.Sprintf("Successfully installed %d packages\n\n", len(m.shared.PackageSpecs)))
+		// Count actual successes
+		successCount := 0
+		for _, result := range m.shared.Results {
+			if result.OK {
+				successCount++
+			}
+		}
+
+		// Success state with accurate counts
+		failedCount := len(m.shared.Results) - successCount
+		if failedCount == 0 {
+			b.WriteString(m.successStyle.Render("✅ Installation Complete!") + "\n\n")
+			b.WriteString(fmt.Sprintf("Successfully installed all %d packages\n\n", successCount))
+		} else {
+			b.WriteString(m.errorStyle.Render("⚠️  Installation Completed with Failures") + "\n\n")
+			b.WriteString(fmt.Sprintf("Success: %d packages, Failed: %d packages\n\n", successCount, failedCount))
+		}
 		b.WriteString("Press Enter or Q to view detailed results\n")
 		return b.String()
 	}
 
-	// Executing state
+	// Executing state with phase indication
 	if m.executing {
-		b.WriteString(fmt.Sprintf("%s %s\n\n", m.spinner.View(), m.stepName))
+		phaseIndicator := "📦 Installing"
+		if m.inResolution {
+			phaseIndicator = "🔧 Resolving Conflicts"
+		}
+		b.WriteString(fmt.Sprintf("%s %s: %s\n\n", m.spinner.View(), phaseIndicator, m.stepName))
+
+		// Show resolution details if available
+		if m.resolutionInfo != "" {
+			b.WriteString(m.normalStyle.Render(m.resolutionInfo) + "\n\n")
+		}
 	}
 
 	// Progress bar
@@ -268,16 +293,36 @@ func (m *ExecutionModel) View() string {
 	b.WriteString(progressText + "\n")
 	b.WriteString(m.progress.View() + "\n\n")
 
-	// Package list
-	b.WriteString("Installing packages:\n")
+	// Package list with detailed status
+	b.WriteString("Packages:\n")
 	for i, spec := range m.shared.PackageSpecs {
-		status := "⏳"
-		if i < m.currentStep-1 {
-			status = "✅"
-		} else if i == m.currentStep-1 {
+		status := "⏳" // Pending
+		statusText := ""
+
+		if i < len(m.shared.Results) {
+			// We have a result for this package
+			result := m.shared.Results[i]
+			if result.OK {
+				status = "✅"
+				if result.Data != nil {
+					if resolved, ok := result.Data["conflict_resolved"].(bool); ok && resolved {
+						statusText = " (conflict resolved)"
+					}
+				}
+			} else {
+				status = "❌"
+				if result.Data != nil {
+					if attempted, ok := result.Data["conflict_resolution_attempted"].(bool); ok && attempted {
+						statusText = " (resolution failed)"
+					}
+				}
+			}
+		} else if i == m.currentStep-2 {
+			// Currently processing this package
 			status = "🔄"
 		}
-		b.WriteString(fmt.Sprintf("%s %s\n", status, spec.Name))
+
+		b.WriteString(fmt.Sprintf("%s %s%s\n", status, spec.Name, statusText))
 	}
 
 	if m.executing {
@@ -444,20 +489,29 @@ func (m *ExecutionModel) executeNextStep() tea.Cmd {
 				m.logger.Debug("execution", fmt.Sprintf("=== COMPLETED AddGitDependency for %s at %s (duration: %s) ===",
 					spec.Name, addEndTime.Format("15:04:05.000"), addDuration))
 
-				if !result.OK {
-					m.logger.Debug("execution", fmt.Sprintf("Failed to add %s: %s", spec.Name, result.Err))
+				// Store result (success or failure)
+				if len(m.shared.Results) == 0 {
+					m.shared.Results = []core.ActionResult{result}
+				} else {
+					m.shared.Results = append(m.shared.Results, result)
+				}
 
-					// Store failure
-					if len(m.shared.Results) == 0 {
-						m.shared.Results = []core.ActionResult{result}
-					} else {
-						m.shared.Results = append(m.shared.Results, result)
+				if !result.OK {
+					m.logger.Info("execution", fmt.Sprintf("❌ Failed to add %s: %s", spec.Name, result.Err))
+
+					// Check if conflict resolution was attempted
+					if result.Data != nil {
+						if attempted, ok := result.Data["conflict_resolution_attempted"].(bool); ok && attempted {
+							m.logger.Info("execution", "🔧 Conflict resolution was attempted but failed")
+						}
 					}
 
+					// Continue to next package instead of stopping
+					// This allows other packages to be installed even if one fails
 					return executionStepMsg{
 						step:     m.currentStep + 1,
-						stepName: fmt.Sprintf("Failed: %s", spec.Name),
-						err:      fmt.Errorf("failed to add %s: %s", spec.Name, result.Err),
+						stepName: fmt.Sprintf("Failed: %s (continuing...)", spec.Name),
+						err:      nil, // Don't set error - just continue
 					}
 				}
 
