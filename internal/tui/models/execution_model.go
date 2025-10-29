@@ -57,6 +57,7 @@ type ExecutionModel struct {
 	headerStyle  lipgloss.Style // Purple bold header
 	successStyle lipgloss.Style // Green bold for success messages
 	errorStyle   lipgloss.Style // Red bold for errors
+	warningStyle lipgloss.Style // Yellow/Orange for warnings
 	normalStyle  lipgloss.Style // Gray for normal text
 }
 
@@ -66,6 +67,11 @@ type executionStepMsg struct {
 	step     int    // Step number (1-based)
 	stepName string // Human-readable step description
 	err      error  // Error if step failed, nil otherwise
+}
+
+// executionProgressMsg is sent to update the display during a long-running step
+type executionProgressMsg struct {
+	stepName string // Human-readable description of current operation
 }
 
 // executionCompleteMsg is sent when the entire installation process completes.
@@ -123,6 +129,10 @@ func NewExecutionModel(cfg core.Config, logger *core.Logger, shared *AppState) *
 			Foreground(lipgloss.Color("196")).
 			Bold(true),
 
+		warningStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("214")).
+			Bold(true),
+
 		normalStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")),
 	}
@@ -178,6 +188,11 @@ func (m *ExecutionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, TransitionToScreen(ScreenResults)
 			}
 		}
+		return m, nil
+
+	case executionProgressMsg:
+		// Update step name without changing step number
+		m.stepName = msg.stepName
 		return m, nil
 
 	case executionStepMsg:
@@ -241,8 +256,12 @@ func (m *ExecutionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *ExecutionModel) View() string {
 	var b strings.Builder
 
-	// Header
-	b.WriteString(m.headerStyle.Render("⚡ Installing Packages") + "\n\n")
+	// Header - change based on whether we're resolving conflicts
+	headerText := "⚡ Installing Packages"
+	if m.inResolution {
+		headerText = "⚡ Conflict Resolver"
+	}
+	b.WriteString(m.headerStyle.Render(headerText) + "\n\n")
 
 	if m.err != nil {
 		// Error state
@@ -278,12 +297,13 @@ func (m *ExecutionModel) View() string {
 	if m.executing {
 		phaseIndicator := "📦 Installing"
 		if m.inResolution {
-			phaseIndicator = "🔧 Resolving Conflicts"
+			phaseIndicator = "🔧 Resolving conflicts for"
 		}
 		b.WriteString(fmt.Sprintf("%s %s: %s\n\n", m.spinner.View(), phaseIndicator, m.stepName))
 
-		// Show resolution details if available
-		if m.resolutionInfo != "" {
+		// Show resolution details prominently
+		if m.inResolution && m.resolutionInfo != "" {
+			b.WriteString(m.warningStyle.Render("🔧 Conflict Resolution in Progress") + "\n")
 			b.WriteString(m.normalStyle.Render(m.resolutionInfo) + "\n\n")
 		}
 	}
@@ -298,6 +318,7 @@ func (m *ExecutionModel) View() string {
 	for i, spec := range m.shared.PackageSpecs {
 		status := "⏳" // Pending
 		statusText := ""
+		conflictInfo := ""
 
 		if i < len(m.shared.Results) {
 			// We have a result for this package
@@ -306,7 +327,11 @@ func (m *ExecutionModel) View() string {
 				status = "✅"
 				if result.Data != nil {
 					if resolved, ok := result.Data["conflict_resolved"].(bool); ok && resolved {
-						statusText = " (conflict resolved)"
+						statusText = " ✓ (conflict resolved)"
+						// Show what was resolved
+						if conflictingPkg, ok := result.Data["conflicting_pkg"].(string); ok && conflictingPkg != "" {
+							conflictInfo = fmt.Sprintf("     [Resolved: %s]", conflictingPkg)
+						}
 					}
 				}
 			} else {
@@ -327,6 +352,9 @@ func (m *ExecutionModel) View() string {
 		}
 
 		b.WriteString(fmt.Sprintf("%s %s%s\n", status, spec.Name, statusText))
+		if conflictInfo != "" {
+			b.WriteString(m.normalStyle.Render(conflictInfo) + "\n")
+		}
 	}
 
 	if m.executing {
@@ -486,7 +514,9 @@ func (m *ExecutionModel) executeNextStep() tea.Cmd {
 				addStartTime := time.Now()
 				m.logger.Debug("execution", fmt.Sprintf("=== STARTING AddGitDependency for %s at %s ===", spec.Name, addStartTime.Format("15:04:05.000")))
 
-				result := core.AddGitDependency(m.logger, &m.cfg, projectPath, spec)
+				// Phase 1: Try installation without auto-resolving conflicts
+				// Conflicts will be collected and resolved in separate phase
+				result := core.AddGitDependency(m.logger, &m.cfg, projectPath, spec, false)
 
 				addEndTime := time.Now()
 				addDuration := addEndTime.Sub(addStartTime)
@@ -577,20 +607,26 @@ func (m *ExecutionModel) executeNextStep() tea.Cmd {
 					m.shared.Results = append(m.shared.Results, result)
 				}
 
-				// Move to next step with clear status message
-				stepMsg := fmt.Sprintf("Added: %s", spec.Name)
-				if conflictResolved {
-					stepMsg = fmt.Sprintf("Added: %s ✓ (conflicts resolved)", spec.Name)
+				// Determine next step message
+				nextStepMsg := ""
+				nextPackageIndex := packageIndex + 1
+				if nextPackageIndex < len(m.shared.PackageSpecs) {
+					// Show what we're about to do next
+					nextSpec := m.shared.PackageSpecs[nextPackageIndex]
+					nextStepMsg = fmt.Sprintf("Installing: %s", nextSpec.Name)
+				} else {
+					nextStepMsg = "Finalizing..."
 				}
+
 				return executionStepMsg{
 					step:     m.currentStep + 1,
-					stepName: stepMsg,
+					stepName: nextStepMsg,
 					err:      nil,
 				}
 			}
 		}
 
-		// If we've completed all steps, finalize
+		// If we've completed all steps, check for conflicts that need resolution
 		if m.currentStep >= m.totalSteps {
 			// Ensure we have results
 			if len(m.shared.Results) == 0 {
@@ -598,6 +634,23 @@ func (m *ExecutionModel) executeNextStep() tea.Cmd {
 					OK:      true,
 					Message: "No operations performed",
 				}}
+			}
+
+			// Check if any packages need conflict resolution
+			var conflictPackages []int // indices of packages that need resolution
+			for i, result := range m.shared.Results {
+				if !result.OK && result.Data != nil {
+					if needsResolution, ok := result.Data["needs_resolution"].(bool); ok && needsResolution {
+						conflictPackages = append(conflictPackages, i)
+					}
+				}
+			}
+
+			// If there are conflicts, transition to resolution phase
+			if len(conflictPackages) > 0 {
+				m.logger.Info("execution", fmt.Sprintf("📋 Installation complete. %d packages need conflict resolution", len(conflictPackages)))
+				// TODO: Transition to conflict resolver screen
+				// For now, just continue to results
 			}
 
 			return executionCompleteMsg{

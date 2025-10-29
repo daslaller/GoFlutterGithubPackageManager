@@ -161,7 +161,7 @@ var (
 func ListGitHubRepos(logger *Logger) ([]RepoCandidate, error) {
 	// Check cache first
 	if cached := githubCache.Get(); cached != nil {
-		logger.Debug("github", "Using cached repository list")
+		logger.Info("github", "Using cached repository list")
 		return cached, nil
 	}
 
@@ -176,7 +176,7 @@ func ListGitHubRepos(logger *Logger) ([]RepoCandidate, error) {
 		return nil, fmt.Errorf("GitHub CLI not authenticated. Please run 'gh auth login'")
 	}
 
-	logger.Debug("github", "Fetching repositories from GitHub")
+	logger.Info("github", "Fetching repositories from GitHub")
 
 	// Get repositories as JSON with increased limit for better UX
 	cmd = exec.Command("gh", "repo", "list",
@@ -347,7 +347,7 @@ func FetchPackageNameFromGit(logger *Logger, gitURL string, ref string, subdir s
 		pubspecPath = subdir + "/pubspec.yaml"
 	}
 
-	logger.Debug("git", fmt.Sprintf("Fetching package name from GitHub repo: %s (path: %s)", ownerRepo, pubspecPath))
+	logger.Info("git", fmt.Sprintf("Fetching package name from GitHub repo: %s (path: %s)", ownerRepo, pubspecPath))
 
 	// Default branch if ref is empty
 	branch := ref
@@ -357,18 +357,18 @@ func FetchPackageNameFromGit(logger *Logger, gitURL string, ref string, subdir s
 
 	// METHOD 1: Try gh api (best method - works for public and private repos)
 	if packageName, err := fetchPackageNameViaGhAPI(logger, ownerRepo, pubspecPath); err == nil {
-		logger.Debug("git", fmt.Sprintf("✓ Found package name via gh api: %s", packageName))
+		logger.Info("git", fmt.Sprintf("✓ Found package name via gh api: %s", packageName))
 		return packageName, nil
 	} else {
-		logger.Debug("git", fmt.Sprintf("✗ gh api method failed: %s", err.Error()))
+		logger.Info("git", fmt.Sprintf("✗ gh api method failed: %s", err.Error()))
 	}
 
 	// METHOD 2: Try raw.githubusercontent.com with specified branch (works for public repos)
 	if packageName, err := fetchPackageNameViaHTTP(logger, ownerRepo, pubspecPath, branch); err == nil {
-		logger.Debug("git", fmt.Sprintf("✓ Found package name via HTTP (branch: %s): %s", branch, packageName))
+		logger.Info("git", fmt.Sprintf("✓ Found package name via HTTP (branch: %s): %s", branch, packageName))
 		return packageName, nil
 	} else {
-		logger.Debug("git", fmt.Sprintf("✗ HTTP method failed for branch '%s': %s", branch, err.Error()))
+		logger.Info("git", fmt.Sprintf("✗ HTTP method failed for branch '%s': %s", branch, err.Error()))
 	}
 
 	// METHOD 3: Try alternative branch names if the specified branch failed
@@ -378,7 +378,7 @@ func FetchPackageNameFromGit(logger *Logger, gitURL string, ref string, subdir s
 			continue // Skip the branch we already tried
 		}
 		if packageName, err := fetchPackageNameViaHTTP(logger, ownerRepo, pubspecPath, altBranch); err == nil {
-			logger.Debug("git", fmt.Sprintf("✓ Found package name via HTTP (alternative branch: %s): %s", altBranch, packageName))
+			logger.Info("git", fmt.Sprintf("✓ Found package name via HTTP (alternative branch: %s): %s", altBranch, packageName))
 			return packageName, nil
 		}
 	}
@@ -388,7 +388,7 @@ func FetchPackageNameFromGit(logger *Logger, gitURL string, ref string, subdir s
 	if slashIdx := strings.LastIndex(ownerRepo, "/"); slashIdx != -1 {
 		repoName = ownerRepo[slashIdx+1:]
 	}
-	logger.Debug("git", fmt.Sprintf("⚠ All methods failed, using repository name as package name: %s", repoName))
+	logger.Info("git", fmt.Sprintf("⚠ All methods failed, using repository name as package name: %s", repoName))
 	return repoName, nil
 }
 
@@ -410,7 +410,7 @@ func fetchPackageNameViaGhAPI(logger *Logger, ownerRepo string, pubspecPath stri
 		"--jq", ".content | @base64d | split(\"\\n\")[] | select(test(\"^name:\")) | sub(\"^name:\\\\s*\"; \"\")",
 	}
 
-	logger.Debug("git", fmt.Sprintf("Trying gh api: gh %s", strings.Join(args, " ")))
+	logger.Info("git", fmt.Sprintf("Trying gh api: gh %s", strings.Join(args, " ")))
 
 	cmd := exec.Command("gh", args...)
 	output, err := cmd.Output()
@@ -440,7 +440,7 @@ func fetchPackageNameViaGhAPI(logger *Logger, ownerRepo string, pubspecPath stri
 func fetchPackageNameViaHTTP(logger *Logger, ownerRepo string, pubspecPath string, branch string) (string, error) {
 	// Build URL: https://raw.githubusercontent.com/owner/repo/branch/path/to/pubspec.yaml
 	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s", ownerRepo, branch, pubspecPath)
-	logger.Debug("git", fmt.Sprintf("Trying HTTP GET: %s", url))
+	logger.Info("git", fmt.Sprintf("Trying HTTP GET: %s", url))
 
 	// Create HTTP client with timeout
 	client := &http.Client{

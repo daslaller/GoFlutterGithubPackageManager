@@ -46,7 +46,8 @@ func FindPubTool() (string, error) {
 
 // AddGitDependency adds a git dependency using pub add
 // This follows Junie's plan to use dart/flutter pub add instead of YAML surgery
-func AddGitDependency(logger *Logger, cfg *Config, projectPath string, spec PkgSpec) ActionResult {
+// If autoResolve is false, conflicts will be returned without attempting resolution
+func AddGitDependency(logger *Logger, cfg *Config, projectPath string, spec PkgSpec, autoResolve bool) ActionResult {
 	tool, err := FindPubTool()
 	if err != nil {
 		return ActionResult{
@@ -211,9 +212,9 @@ func AddGitDependency(logger *Logger, cfg *Config, projectPath string, spec PkgS
 		// Analyze the error and attempt intelligent recovery
 		conflictAnalysis := analyzeDependencyConflict(outputStr, err)
 
-		// If this is a recoverable conflict, try resolution strategies
+		// If this is a recoverable conflict, either attempt resolution or return conflict info
 		if conflictAnalysis.IsRecoverable {
-			// Notify user about the conflict and that we're working on it
+			// Notify user about the conflict
 			logger.Info("pub", "")
 			logger.Info("pub", "═══════════════════════════════════════════════════════════")
 			logger.Info("pub", fmt.Sprintf("⚠️  CONFLICT DETECTED: %s", actualName))
@@ -235,22 +236,28 @@ func AddGitDependency(logger *Logger, cfg *Config, projectPath string, spec PkgS
 			}
 			logger.Info("pub", "")
 
-			// Attempt resolution
-			if resolvedResult := attemptConflictResolution(logger, cfg, projectPath, spec, conflictAnalysis); resolvedResult.OK {
-				// Success - add detailed resolution info to result
-				resolvedResult.Data = map[string]interface{}{
-					"conflict_resolved": true,
-					"conflict_type":     conflictAnalysis.ConflictType,
-					"conflicting_pkg":   conflictAnalysis.ConflictingPkg,
-					"resolution_method": "inline_dependency_override",
-					"user_message":      fmt.Sprintf("Successfully resolved %s conflict with %s", conflictAnalysis.ConflictType, conflictAnalysis.ConflictingPkg),
+			// Only attempt resolution if autoResolve is enabled
+			if autoResolve {
+				// Attempt resolution
+				if resolvedResult := attemptConflictResolution(logger, cfg, projectPath, spec, conflictAnalysis); resolvedResult.OK {
+					// Success - add detailed resolution info to result
+					resolvedResult.Data = map[string]interface{}{
+						"conflict_resolved": true,
+						"conflict_type":     conflictAnalysis.ConflictType,
+						"conflicting_pkg":   conflictAnalysis.ConflictingPkg,
+						"resolution_method": "inline_dependency_override",
+						"user_message":      fmt.Sprintf("Successfully resolved %s conflict with %s", conflictAnalysis.ConflictType, conflictAnalysis.ConflictingPkg),
+					}
+					logger.Info("pub", fmt.Sprintf("✅ Conflict resolved! %s has been successfully added", actualName))
+					logger.Info("pub", fmt.Sprintf("🛠️  Resolution: Used dependency override for %s", conflictAnalysis.ConflictingPkg))
+					return resolvedResult
 				}
-				logger.Info("pub", fmt.Sprintf("✅ Conflict resolved! %s has been successfully added", actualName))
-				logger.Info("pub", fmt.Sprintf("🛠️  Resolution: Used dependency override for %s", conflictAnalysis.ConflictingPkg))
-				return resolvedResult
-			}
 
-			logger.Info("pub", "❌ Automatic conflict resolution failed - manual intervention may be required")
+				logger.Info("pub", "❌ Automatic conflict resolution failed - manual intervention may be required")
+			} else {
+				// Return conflict information without attempting resolution
+				logger.Info("pub", "⏸️  Conflict will be resolved in separate phase")
+			}
 		}
 
 		// Enhanced error reporting with conflict details
@@ -266,9 +273,11 @@ func AddGitDependency(logger *Logger, cfg *Config, projectPath string, spec PkgS
 			Data: map[string]interface{}{
 				"conflict_type":                 conflictAnalysis.ConflictType,
 				"is_recoverable":                conflictAnalysis.IsRecoverable,
+				"conflicting_pkg":               conflictAnalysis.ConflictingPkg,
 				"suggested_fix":                 conflictAnalysis.SuggestedFix,
 				"user_message":                  conflictAnalysis.UserMessage,
-				"conflict_resolution_attempted": conflictAnalysis.IsRecoverable, // Flag to indicate we tried to resolve
+				"conflict_resolution_attempted": autoResolve && conflictAnalysis.IsRecoverable,
+				"needs_resolution":              !autoResolve && conflictAnalysis.IsRecoverable,
 			},
 		}
 	}

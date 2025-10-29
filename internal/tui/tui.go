@@ -13,6 +13,9 @@ import (
 
 // RunNew starts the new multimodel TUI application
 func RunNew(cfg core.Config, logger *core.Logger) error {
+	// Enable quiet mode to prevent logs from bleeding into TUI
+	cfg.Quiet = true
+
 	// Create the main app coordinator
 	app := models.NewAppModel(cfg, logger)
 
