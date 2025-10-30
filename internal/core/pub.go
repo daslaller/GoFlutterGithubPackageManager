@@ -25,9 +25,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // FindPubTool finds the first available pub tool (dart or flutter)
@@ -56,20 +57,11 @@ func AddGitDependency(logger *Logger, cfg *Config, projectPath string, spec PkgS
 		}
 	}
 
-	// CRITICAL FIX: Fetch the actual package name from the git repository's pubspec.yaml
-	// This prevents "name field doesn't match" errors (exit code 65)
-	// dart pub add requires the package name to match the name in the repo's pubspec.yaml
-	actualName, err := FetchPackageNameFromGit(logger, spec.URL, spec.Ref, spec.Subdir)
-	if err != nil {
-		logger.Debug("pub", fmt.Sprintf("Failed to fetch package name from git: %s", err.Error()))
-		logger.Debug("pub", fmt.Sprintf("Falling back to user-provided name: %s", spec.Name))
-		actualName = spec.Name // Fallback to user-provided name if fetch fails
-	} else {
-		if actualName != spec.Name {
-			// Show this at Info level so users can see the automatic correction working
-			logger.Info("pub", fmt.Sprintf("📝 Auto-corrected package name: '%s' → '%s'", spec.Name, actualName))
-		}
-	}
+	// Use the pre-fetched package name from spec.Name
+	// The package name was already fetched during configuration phase
+	// and stored in repo.PackageName, which is now in spec.Name
+	actualName := spec.Name
+	logger.Debug("pub", fmt.Sprintf("Using pre-fetched package name: %s", actualName))
 
 	// Build command arguments using inline git syntax
 	// Format: "package_name:{git:{url: https://..., ref: branch, path: subdir}, version: any}"
@@ -481,16 +473,10 @@ func resolveWithInlineOverride(logger *Logger, cfg *Config, projectPath string, 
 		}
 	}
 
-	// Fetch the actual package name
-	actualName, err := FetchPackageNameFromGit(logger, spec.URL, spec.Ref, spec.Subdir)
-	if err != nil {
-		logger.Debug("pub", fmt.Sprintf("Failed to fetch package name from git: %s", err.Error()))
-		actualName = spec.Name
-	} else {
-		if actualName != spec.Name {
-			logger.Info("pub", fmt.Sprintf("📝 Auto-corrected package name: '%s' → '%s'", spec.Name, actualName))
-		}
-	}
+	// Use the pre-fetched package name from spec.Name
+	// The package name was already fetched during configuration phase
+	actualName := spec.Name
+	logger.Debug("pub", fmt.Sprintf("Using pre-fetched package name: %s", actualName))
 
 	// Build git URL specification for inline syntax
 	// Format: "package_name:{git:{url: https://..., ref: branch}, version: any}"
@@ -591,16 +577,10 @@ func addGitDependencyWithoutConflictResolution(logger *Logger, cfg *Config, proj
 		}
 	}
 
-	// Fetch the actual package name (same as main function)
-	actualName, err := FetchPackageNameFromGit(logger, spec.URL, spec.Ref, spec.Subdir)
-	if err != nil {
-		logger.Debug("pub", fmt.Sprintf("Failed to fetch package name from git: %s", err.Error()))
-		actualName = spec.Name
-	} else {
-		if actualName != spec.Name {
-			logger.Info("pub", fmt.Sprintf("📝 Auto-corrected package name: '%s' → '%s'", spec.Name, actualName))
-		}
-	}
+	// Use the pre-fetched package name from spec.Name
+	// The package name was already fetched during configuration phase
+	actualName := spec.Name
+	logger.Debug("pub", fmt.Sprintf("Using pre-fetched package name: %s", actualName))
 
 	// Build command arguments
 	args := []string{"pub", "add", actualName, "--git-url", spec.URL}
@@ -732,168 +712,83 @@ func CreateBackup(projectPath string) (BackupInfo, error) {
 
 // ValidatePubspec performs basic validation on pubspec.yaml
 
-// Compiled regex patterns for efficient parsing
-var (
-	pubspecParseOnce sync.Once
-	// Git dependency pattern: captures package name, URL, ref, and path
-	gitDepPattern *regexp.Regexp
-	// General YAML value extraction patterns
-	_           *regexp.Regexp
-	urlPattern  *regexp.Regexp
-	refPattern  *regexp.Regexp
-	pathPattern *regexp.Regexp
-)
-
-// initPubspecRegex initializes regex patterns for pubspec parsing
-func initPubspecRegex() {
-	pubspecParseOnce.Do(func() {
-		// Pattern to match git dependencies in pubspec.yaml
-		// This matches the entire git dependency block
-		gitDepPattern = regexp.MustCompile(`(?s)(\s+\w+):\s*\n?\s*git:\s*\n?(?:\s*url:\s*['"]?([^'"\n]+)['"]?\s*\n?)?(?:\s*ref:\s*['"]?([^'"\n]+)['"]?\s*\n?)?(?:\s*path:\s*['"]?([^'"\n]+)['"]?\s*\n?)?`)
-
-		// Individual value patterns for fallback parsing
-		_ = regexp.MustCompile(`^\s*name:\s*['"]?([^'"\n]+)['"]?\s*$`)
-		urlPattern = regexp.MustCompile(`^\s*url:\s*['"]?([^'"\n]+)['"]?\s*$`)
-		refPattern = regexp.MustCompile(`^\s*ref:\s*['"]?([^'"\n]+)['"]?\s*$`)
-		pathPattern = regexp.MustCompile(`^\s*path:\s*['"]?([^'"\n]+)['"]?\s*$`)
-	})
+// pubspecYAML represents the structure of pubspec.yaml for parsing git dependencies
+type pubspecYAML struct {
+	Dependencies map[string]interface{} `yaml:"dependencies"`
 }
 
-// ListGitDependencies extracts git dependencies from pubspec.yaml with optimized parsing
-func ListGitDependencies(projectPath string) ([]PkgSpec, error) {
-	initPubspecRegex() // Initialize regex patterns
+// gitDependency represents a git dependency structure in pubspec.yaml
+type gitDependency struct {
+	Git interface{} `yaml:"git"` // Can be string (URL) or gitDetails struct
+}
 
+// gitDetails represents the detailed git dependency structure
+type gitDetails struct {
+	URL  string `yaml:"url"`
+	Ref  string `yaml:"ref,omitempty"`
+	Path string `yaml:"path,omitempty"`
+}
+
+// ListGitDependencies extracts git dependencies from pubspec.yaml using proper YAML parsing
+func ListGitDependencies(projectPath string) ([]PkgSpec, error) {
 	pubspecPath := filepath.Join(projectPath, "pubspec.yaml")
 	content, err := os.ReadFile(pubspecPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read pubspec.yaml: %w", err)
 	}
 
-	// Try fast regex-based parsing first
-	if deps := parseGitDepsWithRegex(string(content)); len(deps) > 0 {
-		return deps, nil
+	var pubspec pubspecYAML
+	if err := yaml.Unmarshal(content, &pubspec); err != nil {
+		return nil, fmt.Errorf("failed to parse pubspec.yaml: %w", err)
 	}
 
-	// Fallback to line-by-line parsing for complex cases
-	return parseGitDepsLineByLine(string(content))
-}
-
-// parseGitDepsWithRegex uses compiled regex for fast parsing
-func parseGitDepsWithRegex(content string) []PkgSpec {
 	var deps []PkgSpec
 
-	// Find dependencies section first
-	depsStart := strings.Index(content, "dependencies:")
-	if depsStart == -1 {
-		return deps
-	}
-
-	// Find next top-level section to limit scope
-	depsContent := content[depsStart:]
-	nextSection := regexp.MustCompile(`\n\w+:`).FindStringIndex(depsContent[12:]) // Skip "dependencies:"
-	if nextSection != nil {
-		depsContent = depsContent[:12+nextSection[0]]
-	}
-
-	// Find all git dependencies in the dependencies section
-	matches := gitDepPattern.FindAllStringSubmatch(depsContent, -1)
-
-	for _, match := range matches {
-		if len(match) >= 3 {
-			pkg := PkgSpec{
-				Name: strings.TrimSpace(match[1]),
-			}
-
-			// Extract URL (match[2])
-			if len(match) > 2 && match[2] != "" {
-				pkg.URL = strings.TrimSpace(match[2])
-			}
-
-			// Extract ref (match[3])
-			if len(match) > 3 && match[3] != "" {
-				pkg.Ref = strings.TrimSpace(match[3])
-			}
-
-			// Extract path (match[4])
-			if len(match) > 4 && match[4] != "" {
-				pkg.Subdir = strings.TrimSpace(match[4])
-			}
-
-			// Only add if we have a name and URL
-			if pkg.Name != "" && pkg.URL != "" {
-				deps = append(deps, pkg)
-			}
-		}
-	}
-
-	return deps
-}
-
-// parseGitDepsLineByLine fallback parser for complex YAML cases
-func parseGitDepsLineByLine(content string) ([]PkgSpec, error) {
-	var deps []PkgSpec
-	lines := strings.Split(content, "\n")
-	inDependencies := false
-	inGitDep := false
-	currentPkg := PkgSpec{}
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		// Check for dependencies section
-		if trimmed == "dependencies:" {
-			inDependencies = true
-			continue
+	// Iterate through dependencies
+	for name, dep := range pubspec.Dependencies {
+		// Check if this dependency has a git field
+		depMap, ok := dep.(map[string]interface{})
+		if !ok {
+			continue // Not a git dependency (probably a version string)
 		}
 
-		// Exit dependencies if we hit another top-level section
-		if inDependencies && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") && trimmed != "" && !strings.HasPrefix(trimmed, "#") {
-			inDependencies = false
+		gitField, hasGit := depMap["git"]
+		if !hasGit {
+			continue // Not a git dependency
 		}
 
-		if !inDependencies {
-			continue
-		}
+		pkg := PkgSpec{Name: name}
 
-		// Check for package name (indented but not double-indented)
-		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") && strings.Contains(line, ":") && !strings.HasPrefix(trimmed, "#") {
-			// Save previous git dependency if we had one
-			if inGitDep && currentPkg.Name != "" && currentPkg.URL != "" {
-				deps = append(deps, currentPkg)
+		// Git field can be either a string (URL) or a map (with url, ref, path)
+		switch v := gitField.(type) {
+		case string:
+			// Simple form: package: {git: "https://github.com/..."}
+			pkg.URL = v
+		case map[string]interface{}:
+			// Detailed form: package: {git: {url: "...", ref: "...", path: "..."}}
+			if url, ok := v["url"].(string); ok {
+				pkg.URL = url
 			}
-
-			// Start new package
-			parts := strings.SplitN(trimmed, ":", 2)
-			currentPkg = PkgSpec{Name: strings.TrimSpace(parts[0])}
-			inGitDep = false
-		}
-
-		// Check for git dependency
-		if trimmed == "git:" {
-			inGitDep = true
-		}
-
-		// Extract git details using regex for consistent parsing
-		if inGitDep {
-			if match := urlPattern.FindStringSubmatch(line); len(match) > 1 {
-				currentPkg.URL = match[1]
-			} else if match := refPattern.FindStringSubmatch(line); len(match) > 1 {
-				currentPkg.Ref = match[1]
-			} else if match := pathPattern.FindStringSubmatch(line); len(match) > 1 {
-				currentPkg.Subdir = match[1]
+			if ref, ok := v["ref"].(string); ok {
+				pkg.Ref = ref
+			}
+			if path, ok := v["path"].(string); ok {
+				pkg.Subdir = path
 			}
 		}
-	}
 
-	// Don't forget the last dependency
-	if inGitDep && currentPkg.Name != "" && currentPkg.URL != "" {
-		deps = append(deps, currentPkg)
+		// Only add if we have a name and URL
+		if pkg.Name != "" && pkg.URL != "" {
+			deps = append(deps, pkg)
+		}
 	}
 
 	return deps, nil
 }
 
 // extractConflictingPackageName attempts to extract the conflicting package name from error output
+// Note: This function uses regex because it parses error messages from dart pub, not YAML files.
+// For YAML parsing, see ListGitDependencies which uses yaml.v3 properly.
 func extractConflictingPackageName(output string) string {
 	// Look for patterns like "because project_name depends on package_name"
 	patterns := []string{

@@ -72,7 +72,7 @@ func NewConfigurationModel(cfg core.Config, logger *core.Logger, shared *AppStat
 		logger:       logger,
 		shared:       shared,
 		currentRepo:  0,
-		currentField: 0,
+		currentField: 1, // Start at field 1 (ref) since field 0 (name) is read-only
 
 		// Styles
 		headerStyle: lipgloss.NewStyle().
@@ -181,7 +181,7 @@ func (m *ConfigurationModel) View() string {
 		b.WriteString(fmt.Sprintf("📦 Configuring: %s/%s\n\n", repo.Owner, repo.Name))
 
 		// Show input fields
-		fields := []string{"Package Name:", "Git Ref (branch/tag):", "Subdirectory:"}
+		fields := []string{"Package Name (read-only):", "Git Ref (branch/tag):", "Subdirectory:"}
 		for i, field := range fields {
 			if i == m.currentField {
 				b.WriteString(m.selectedStyle.Render(field) + "\n")
@@ -230,7 +230,7 @@ func (m *ConfigurationModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.currentRepo < len(m.shared.SelectedDependencies) {
 			m.currentField++
 			if m.currentField >= 3 {
-				m.currentField = 0
+				m.currentField = 1 // Skip field 0 (name is read-only), go to field 1 (ref)
 			}
 			m.focusCurrentInput()
 		}
@@ -239,8 +239,8 @@ func (m *ConfigurationModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab":
 		if m.currentRepo < len(m.shared.SelectedDependencies) {
 			m.currentField--
-			if m.currentField < 0 {
-				m.currentField = 2
+			if m.currentField < 1 { // Skip field 0 (name is read-only)
+				m.currentField = 2 // Go to field 2 (subdir)
 			}
 			m.focusCurrentInput()
 		}
@@ -254,7 +254,7 @@ func (m *ConfigurationModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			// Move to next repository
 			m.currentRepo++
-			m.currentField = 0
+			m.currentField = 1 // Start at field 1 (ref) since field 0 (name) is read-only
 			m.focusCurrentInput()
 		}
 		return m, nil
@@ -298,6 +298,8 @@ func (m *ConfigurationModel) setupInputs() {
 
 	for i, repo := range m.shared.SelectedDependencies {
 		// Package name input - use actual package name if available, otherwise use repo name
+		// This field is read-only because the package name is fetched from pubspec.yaml
+		// and cannot be changed (dart pub add requires exact match with pubspec.yaml)
 		packageName := repo.PackageName
 		if packageName == "" {
 			packageName = repo.Name
@@ -307,6 +309,9 @@ func (m *ConfigurationModel) setupInputs() {
 		nameInput.Placeholder = packageName
 		nameInput.SetValue(packageName)
 		nameInput.Width = 40
+		// Make the name input read-only by disabling cursor and text entry
+		nameInput.Blur()
+		nameInput.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245")) // Dimmed gray
 		m.inputs[i*3] = nameInput
 
 		// Ref input
@@ -378,9 +383,13 @@ func (m *ConfigurationModel) generatePackageSpecs() {
 		// Safety check for input array bounds
 		if i*3+2 >= len(m.inputs) {
 			m.logger.Debug("configuration", fmt.Sprintf("Insufficient inputs for repo %d", i))
-			// Create default spec
+			// Create default spec using pre-fetched package name
+			packageName := repo.PackageName
+			if packageName == "" {
+				packageName = repo.Name
+			}
 			m.packageSpecs[i] = core.PkgSpec{
-				Name:   repo.Name,
+				Name:   packageName,
 				URL:    repo.URL,
 				Ref:    "main",
 				Subdir: "",
@@ -388,9 +397,10 @@ func (m *ConfigurationModel) generatePackageSpecs() {
 			continue
 		}
 
-		name := m.inputs[i*3].Value()
-		if name == "" {
-			name = repo.Name
+		// Use pre-fetched package name from repo (field 0 is read-only)
+		packageName := repo.PackageName
+		if packageName == "" {
+			packageName = repo.Name
 		}
 
 		ref := m.inputs[i*3+1].Value()
@@ -401,7 +411,7 @@ func (m *ConfigurationModel) generatePackageSpecs() {
 		subdir := m.inputs[i*3+2].Value()
 
 		m.packageSpecs[i] = core.PkgSpec{
-			Name:   name,
+			Name:   packageName,
 			URL:    repo.URL,
 			Ref:    ref,
 			Subdir: subdir,

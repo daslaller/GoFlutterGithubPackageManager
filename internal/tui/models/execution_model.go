@@ -217,10 +217,29 @@ func (m *ExecutionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.complete = true
 		if msg.err != nil {
 			m.err = msg.err
-		} else {
-			m.shared.Results = msg.results
-			m.logger.Info("execution", "Package installation completed successfully")
+			return m, nil
 		}
+
+		m.shared.Results = msg.results
+		m.logger.Info("execution", "Package installation completed successfully")
+
+		// Check if any packages need conflict resolution
+		hasConflicts := false
+		for _, result := range msg.results {
+			if !result.OK && result.Data != nil {
+				if needsResolution, ok := result.Data["needs_resolution"].(bool); ok && needsResolution {
+					hasConflicts = true
+					break
+				}
+			}
+		}
+
+		// If there are conflicts, automatically transition to conflict resolver
+		if hasConflicts {
+			m.logger.Info("execution", "Conflicts detected - transitioning to conflict resolver")
+			return m, TransitionToScreen(ScreenConflictResolver)
+		}
+
 		return m, nil
 
 	case spinner.TickMsg:
@@ -647,10 +666,9 @@ func (m *ExecutionModel) executeNextStep() tea.Cmd {
 			}
 
 			// If there are conflicts, transition to resolution phase
+			// The executionCompleteMsg handler will automatically transition to ScreenConflictResolver
 			if len(conflictPackages) > 0 {
 				m.logger.Info("execution", fmt.Sprintf("📋 Installation complete. %d packages need conflict resolution", len(conflictPackages)))
-				// TODO: Transition to conflict resolver screen
-				// For now, just continue to results
 			}
 
 			return executionCompleteMsg{

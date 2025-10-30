@@ -1,5 +1,0 @@
-# github.com/daslaller/GoFlutterGithubPackageManager/internal/tui/testing
-internal\tui\testing\terminal_output_test.go:19:2: no required module provides package github.com/charmbracelet/x/exp/teatest; to add it:
-	go get github.com/charmbracelet/x/exp/teatest
-FAIL	github.com/daslaller/GoFlutterGithubPackageManager/internal/tui/testing [setup failed]
-FAIL

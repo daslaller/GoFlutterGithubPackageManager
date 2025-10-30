@@ -27,6 +27,7 @@ const (
 	ScreenConfiguration
 	ScreenConfirmation
 	ScreenExecution
+	ScreenConflictResolver // NEW: Resolve dependency conflicts interactively
 	ScreenResults
 	ScreenSearchConfig // NEW: Configure repository search filters
 	ScreenForceUpdate  // NEW: Force update stale packages
@@ -58,6 +59,7 @@ type AppModel struct {
 	configuration       tea.Model
 	confirmation        tea.Model
 	execution           tea.Model
+	conflictResolver    tea.Model // NEW: Resolve dependency conflicts
 	results             tea.Model
 	searchConfig        tea.Model // NEW: Configure search filters
 	forceUpdate         tea.Model // NEW: Force update packages
@@ -217,6 +219,10 @@ func (m *AppModel) View() string {
 		if m.execution != nil {
 			return m.execution.View()
 		}
+	case ScreenConflictResolver:
+		if m.conflictResolver != nil {
+			return m.conflictResolver.View()
+		}
 	case ScreenResults:
 		if m.results != nil {
 			return m.results.View()
@@ -294,6 +300,10 @@ func (m *AppModel) updateCurrentScreen(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ScreenExecution:
 		if m.execution != nil {
 			m.execution, cmd = m.execution.Update(msg)
+		}
+	case ScreenConflictResolver:
+		if m.conflictResolver != nil {
+			m.conflictResolver, cmd = m.conflictResolver.Update(msg)
 		}
 	case ScreenResults:
 		if m.results != nil {
@@ -397,6 +407,12 @@ func (m *AppModel) transitionToScreen(screen AppScreen, data interface{}) (tea.M
 			m.execution = NewExecutionModel(m.cfg, m.logger, m.SharedState)
 		}
 		return m, m.execution.Init()
+
+	case ScreenConflictResolver:
+		if m.conflictResolver == nil {
+			m.conflictResolver = NewConflictResolverModel(m.cfg, m.logger, m.SharedState)
+		}
+		return m, m.conflictResolver.Init()
 
 	case ScreenResults:
 		if m.results == nil {
