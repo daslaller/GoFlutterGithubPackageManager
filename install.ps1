@@ -1,4 +1,4 @@
-# Flutter Package Manager (Go) - Windows Installer
+﻿# Flutter Package Manager (Go) - Windows Installer
 # One-line install: iwr -useb https://raw.githubusercontent.com/daslaller/GoFlutterGithubPackageManager/main/install.ps1 | iex
 
 param(
