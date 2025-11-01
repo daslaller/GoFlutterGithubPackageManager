@@ -16,6 +16,10 @@ func RunNew(cfg core.Config, logger *core.Logger) error {
 	// Enable quiet mode to prevent logs from bleeding into TUI
 	cfg.Quiet = true
 
+	// Suppress Info and Debug logs during TUI execution to prevent output interference
+	// Only Error logs will be shown (which shouldn't happen during normal operation)
+	logger.SetLevel(core.LogLevelError)
+
 	// Create the main app coordinator
 	app := models.NewAppModel(cfg, logger)
 

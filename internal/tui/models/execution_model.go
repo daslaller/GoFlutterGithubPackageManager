@@ -268,19 +268,16 @@ func (m *ExecutionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 //
 // Each package in the list shows its status:
 //   - ⏳ Pending (not yet started)
-//   - 🔄 In progress (currently installing)
+//   - Currently installing (shown with spinner in status line)
 //   - ✅ Complete (successfully installed)
+//   - ❌ Failed (installation failed)
 //
 // The progress bar uses a gradient and animates smoothly as steps complete.
 func (m *ExecutionModel) View() string {
 	var b strings.Builder
 
-	// Header - change based on whether we're resolving conflicts
-	headerText := "⚡ Installing Packages"
-	if m.inResolution {
-		headerText = "⚡ Conflict Resolver"
-	}
-	b.WriteString(m.headerStyle.Render(headerText) + "\n\n")
+	// Header
+	b.WriteString(m.headerStyle.Render("⚡ Installing Packages") + "\n\n")
 
 	if m.err != nil {
 		// Error state
@@ -293,91 +290,93 @@ func (m *ExecutionModel) View() string {
 	if m.complete {
 		// Count actual successes
 		successCount := 0
+		failedCount := 0
 		for _, result := range m.shared.Results {
 			if result.OK {
 				successCount++
+			} else {
+				failedCount++
 			}
 		}
 
 		// Success state with accurate counts
-		failedCount := len(m.shared.Results) - successCount
 		if failedCount == 0 {
-			b.WriteString(m.successStyle.Render("✅ Installation Complete!") + "\n\n")
-			b.WriteString(fmt.Sprintf("Successfully installed all %d packages\n\n", successCount))
+			b.WriteString(m.successStyle.Render("✅ All packages installed successfully!") + "\n\n")
 		} else {
-			b.WriteString(m.errorStyle.Render("⚠️  Installation Completed with Failures") + "\n\n")
-			b.WriteString(fmt.Sprintf("Success: %d packages, Failed: %d packages\n\n", successCount, failedCount))
+			b.WriteString(m.warningStyle.Render("⚠️  Installation completed with some failures") + "\n\n")
 		}
-		b.WriteString("Press Enter or Q to view detailed results\n")
+
+		b.WriteString(m.normalStyle.Render(fmt.Sprintf("Successfully installed: %d packages", successCount)) + "\n")
+		if failedCount > 0 {
+			b.WriteString(m.errorStyle.Render(fmt.Sprintf("Failed to install: %d packages", failedCount)) + "\n")
+		}
+		b.WriteString("\nPress Enter to view detailed results\n")
 		return b.String()
 	}
 
-	// Executing state with phase indication
+	// Executing state - show spinner with current action
 	if m.executing {
-		phaseIndicator := "📦 Installing"
-		if m.inResolution {
-			phaseIndicator = "🔧 Resolving conflicts for"
+		// Determine current package being processed
+		packageIndex := m.currentStep - 2
+		currentPackage := ""
+		if packageIndex >= 0 && packageIndex < len(m.shared.PackageSpecs) {
+			currentPackage = m.shared.PackageSpecs[packageIndex].Name
 		}
-		b.WriteString(fmt.Sprintf("%s %s: %s\n\n", m.spinner.View(), phaseIndicator, m.stepName))
 
-		// Show resolution details prominently
-		if m.inResolution && m.resolutionInfo != "" {
-			b.WriteString(m.warningStyle.Render("🔧 Conflict Resolution in Progress") + "\n")
-			b.WriteString(m.normalStyle.Render(m.resolutionInfo) + "\n\n")
+		if currentPackage != "" {
+			b.WriteString(m.headerStyle.Render(fmt.Sprintf("%s  📦 Installing: %s", m.spinner.View(), currentPackage)) + "\n")
+		} else {
+			b.WriteString(m.headerStyle.Render(fmt.Sprintf("%s  Preparing installation...", m.spinner.View())) + "\n")
 		}
 	}
+
+	// Calculate completion statistics for display
+	completedCount := 0
+	failedCount := 0
+	for _, result := range m.shared.Results {
+		if result.OK {
+			completedCount++
+		} else {
+			failedCount++
+		}
+	}
+	totalPackages := len(m.shared.PackageSpecs)
+	remainingCount := totalPackages - completedCount - failedCount
 
 	// Progress bar
-	progressText := fmt.Sprintf("Progress: %d/%d steps", m.currentStep, m.totalSteps)
-	b.WriteString(progressText + "\n")
+	b.WriteString("\n")
 	b.WriteString(m.progress.View() + "\n\n")
 
-	// Package list with detailed status
-	b.WriteString("Packages:\n")
-	for i, spec := range m.shared.PackageSpecs {
-		status := "⏳" // Pending
-		statusText := ""
-		conflictInfo := ""
+	// Statistics line
+	b.WriteString(m.normalStyle.Render(fmt.Sprintf("Progress: %d / %d packages", completedCount+failedCount, totalPackages)) + "\n")
+	b.WriteString(m.normalStyle.Render(fmt.Sprintf("✅ Success: %d  ❌ Failed: %d  ⏳ Remaining: %d", completedCount, failedCount, remainingCount)) + "\n\n")
 
-		if i < len(m.shared.Results) {
-			// We have a result for this package
+	// Show only completed packages (successful or failed)
+	if completedCount+failedCount > 0 {
+		for i := 0; i < len(m.shared.Results) && i < len(m.shared.PackageSpecs); i++ {
 			result := m.shared.Results[i]
-			if result.OK {
-				status = "✅"
-				if result.Data != nil {
-					if resolved, ok := result.Data["conflict_resolved"].(bool); ok && resolved {
-						statusText = " ✓ (conflict resolved)"
-						// Show what was resolved
-						if conflictingPkg, ok := result.Data["conflicting_pkg"].(string); ok && conflictingPkg != "" {
-							conflictInfo = fmt.Sprintf("     [Resolved: %s]", conflictingPkg)
-						}
-					}
-				}
-			} else {
-				status = "❌"
-				if result.Data != nil {
-					if attempted, ok := result.Data["conflict_resolution_attempted"].(bool); ok && attempted {
-						statusText = " (resolution failed)"
-					}
-				}
-			}
-		} else if i == m.currentStep-2 {
-			// Currently processing this package
-			status = "🔄"
-			// Check if we're in resolution phase
-			if m.inResolution {
-				statusText = " (resolving conflicts...)"
-			}
-		}
+			spec := m.shared.PackageSpecs[i]
 
-		b.WriteString(fmt.Sprintf("%s %s%s\n", status, spec.Name, statusText))
-		if conflictInfo != "" {
-			b.WriteString(m.normalStyle.Render(conflictInfo) + "\n")
+			if result.OK {
+				b.WriteString(m.successStyle.Render(fmt.Sprintf("✅ %s", spec.Name)) + "\n")
+			} else {
+				b.WriteString(m.errorStyle.Render(fmt.Sprintf("❌ %s", spec.Name)) + "\n")
+			}
 		}
 	}
 
-	if m.executing {
-		b.WriteString("\nPlease wait while packages are being installed...")
+	// Show pending packages (cleaner, no status icon spam)
+	if remainingCount > 0 && m.executing {
+		b.WriteString("\n")
+		startIndex := completedCount + failedCount
+		for i := startIndex; i < totalPackages && i < startIndex+3; i++ {
+			if i < len(m.shared.PackageSpecs) {
+				b.WriteString(m.normalStyle.Render(fmt.Sprintf("⏳ %s", m.shared.PackageSpecs[i].Name)) + "\n")
+			}
+		}
+		if remainingCount > 3 {
+			b.WriteString(m.normalStyle.Render(fmt.Sprintf("   ... and %d more", remainingCount-3)) + "\n")
+		}
 	}
 
 	return b.String()

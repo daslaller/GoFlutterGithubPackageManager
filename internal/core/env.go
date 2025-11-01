@@ -167,6 +167,16 @@ func (l *Logger) Debug(component, message string) {
 	l.Log(LogLevelDebug, component, message, nil)
 }
 
+// SetLevel sets the logging level (useful for TUI mode to suppress console output)
+func (l *Logger) SetLevel(level LogLevel) {
+	l.level = level
+}
+
+// GetLevel returns the current logging level
+func (l *Logger) GetLevel() LogLevel {
+	return l.level
+}
+
 // LogCommand logs a command execution
 func (l *Logger) LogCommand(component, command string, args []string) {
 	if l.cfg.Explain {
