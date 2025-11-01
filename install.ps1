@@ -24,14 +24,39 @@ Write-Host "🔧 Installing Flutter Package Manager..." -ForegroundColor Yellow
 # Check if Go version is already installed
 $existingInstall = Get-Command "flutter-pm" -ErrorAction SilentlyContinue
 if ($existingInstall -and -not $Force) {
-    Write-Host "✅ Flutter Package Manager is already installed at: $($existingInstall.Source)" -ForegroundColor Green
+    Write-Host "✅ Flutter Package Manager is already installed!" -ForegroundColor Green
     Write-Host "📍 Location: $($existingInstall.Source)" -ForegroundColor Gray
     Write-Host ""
-    Write-Host "💡 To reinstall, run with -Force parameter:" -ForegroundColor Yellow
-    Write-Host "   iwr -useb https://raw.githubusercontent.com/daslaller/GoFlutterGithubPackageManager/main/install.ps1 | iex -ArgumentList '-Force'" -ForegroundColor Gray
+
+    # Get current version
+    try {
+        $currentVersion = & flutter-pm --version 2>$null | Select-Object -First 1
+        Write-Host "📦 Current Version: $currentVersion" -ForegroundColor Cyan
+    } catch {
+        Write-Host "📦 Current Version: Unknown" -ForegroundColor Gray
+    }
+
     Write-Host ""
-    Write-Host "🚀 Run 'flutter-pm' to start!" -ForegroundColor Green
-    exit 0
+    Write-Host "Would you like to update/reinstall? (Y/N)" -ForegroundColor Yellow -NoNewline
+    Write-Host " " -NoNewline
+    $response = Read-Host
+
+    if ($response -match '^[Yy]') {
+        Write-Host ""
+        Write-Host "🔄 Updating Flutter Package Manager..." -ForegroundColor Yellow
+        $Force = $true
+        # Continue with installation/update
+    } else {
+        Write-Host ""
+        Write-Host "🚀 Run 'flutter-pm' to start!" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "💡 To force update later, run:" -ForegroundColor Yellow
+        Write-Host "   iwr -useb https://raw.githubusercontent.com/daslaller/GoFlutterGithubPackageManager/main/install.ps1 | iex" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "Press any key to exit..." -ForegroundColor Gray
+        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        exit 0
+    }
 }
 
 # Create install directory
@@ -72,6 +97,9 @@ try {
     Write-Host "❌ Download failed: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "🔗 Please check: $downloadUrl" -ForegroundColor Yellow
     Write-Host "💡 You can also download manually and place in: $InstallDir" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "Press any key to exit..." -ForegroundColor Gray
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 1
 }
 
@@ -130,3 +158,6 @@ if (-not $gitInstalled) {
 
 Write-Host "🔗 Documentation: https://github.com/daslaller/GoFlutterGithubPackageManager" -ForegroundColor Cyan
 Write-Host "🐛 Issues: https://github.com/daslaller/GoFlutterGithubPackageManager/issues" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Press any key to exit..." -ForegroundColor Gray
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
