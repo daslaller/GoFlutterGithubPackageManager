@@ -50,8 +50,6 @@ type ExecutionModel struct {
 	spinner        spinner.Model  // Dot spinner for active operations
 	complete       bool           // Whether installation has finished
 	err            error          // Any error that occurred during execution
-	inResolution   bool           // Whether we're currently in conflict resolution phase
-	resolutionInfo string         // Details about current resolution attempt
 
 	// Lipgloss styles for consistent theming
 	headerStyle  lipgloss.Style // Purple bold header
@@ -149,7 +147,7 @@ func (m *ExecutionModel) Init() tea.Cmd {
 	if m.shared.SourceRepo != nil && m.shared.SourceProject != nil {
 		// This is the GitHub source clone flow
 		// Log the information about what needs to be done
-		m.logger.Info("execution", fmt.Sprintf("=== SOURCE CLONE FLOW DETECTED ==="))
+		m.logger.Info("execution", "=== SOURCE CLONE FLOW DETECTED ===")
 		m.logger.Info("execution", fmt.Sprintf("  Repository: %s", m.shared.SourceRepo.Name))
 		m.logger.Info("execution", fmt.Sprintf("  URL: %s", m.shared.SourceRepo.URL))
 		m.logger.Info("execution", fmt.Sprintf("  Target Path: %s", m.shared.SourceProject.Path))
