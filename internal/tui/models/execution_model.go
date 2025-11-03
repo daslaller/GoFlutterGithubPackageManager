@@ -42,14 +42,14 @@ type ExecutionModel struct {
 	shared *AppState    // Shared state containing package specs to install
 
 	// Execution state tracking
-	executing      bool           // Whether installation is currently in progress
-	currentStep    int            // Current step number (1-based)
-	totalSteps     int            // Total number of steps to complete
-	stepName       string         // Human-readable name of current operation
-	progress       progress.Model // Animated progress bar (gradient pink to orange)
-	spinner        spinner.Model  // Dot spinner for active operations
-	complete       bool           // Whether installation has finished
-	err            error          // Any error that occurred during execution
+	executing   bool           // Whether installation is currently in progress
+	currentStep int            // Current step number (1-based)
+	totalSteps  int            // Total number of steps to complete
+	stepName    string         // Human-readable name of current operation
+	progress    progress.Model // Animated progress bar (gradient pink to orange)
+	spinner     spinner.Model  // Dot spinner for active operations
+	complete    bool           // Whether installation has finished
+	err         error          // Any error that occurred during execution
 
 	// Lipgloss styles for consistent theming
 	headerStyle  lipgloss.Style // Purple bold header
@@ -539,12 +539,14 @@ func (m *ExecutionModel) executeNextStep() tea.Cmd {
 				m.logger.Debug("execution", fmt.Sprintf("=== COMPLETED AddGitDependency for %s at %s (duration: %s) ===",
 					spec.Name, addEndTime.Format("15:04:05.000"), addDuration))
 
-				// Store result (success or failure)
-				if len(m.shared.Results) == 0 {
-					m.shared.Results = []core.ActionResult{result}
-				} else {
-					m.shared.Results = append(m.shared.Results, result)
+				// Enhance result data with package information
+				if result.Data == nil {
+					result.Data = make(map[string]interface{})
 				}
+				result.Data["package"] = spec.Name
+				result.Data["url"] = spec.URL
+				result.Data["ref"] = spec.Ref
+				result.Data["projectPath"] = absProjectPath
 
 				if !result.OK {
 					// Check if conflict resolution was attempted
@@ -560,6 +562,9 @@ func (m *ExecutionModel) executeNextStep() tea.Cmd {
 					} else {
 						m.logger.Info("execution", fmt.Sprintf("❌ Failed to add %s: %s", spec.Name, result.Err))
 					}
+
+					// Store failed result
+					m.shared.Results = append(m.shared.Results, result)
 
 					// Continue to next package instead of stopping
 					// This allows other packages to be installed even if one fails
@@ -593,35 +598,8 @@ func (m *ExecutionModel) executeNextStep() tea.Cmd {
 					m.logger.Debug("execution", fmt.Sprintf("Successfully added %s", spec.Name))
 				}
 
-				// Store success with conflict resolution flag if applicable
-				resultData := map[string]interface{}{
-					"package":     spec.Name,
-					"url":         spec.URL,
-					"ref":         spec.Ref,
-					"projectPath": absProjectPath,
-				}
-				// Preserve conflict_resolved flag if it exists
-				if result.Data != nil {
-					if resolved, ok := result.Data["conflict_resolved"].(bool); ok {
-						resultData["conflict_resolved"] = resolved
-					}
-					if conflictType, ok := result.Data["conflict_type"].(string); ok {
-						resultData["conflict_type"] = conflictType
-					}
-					if conflictingPkg, ok := result.Data["conflicting_pkg"].(string); ok {
-						resultData["conflicting_pkg"] = conflictingPkg
-					}
-					if resolutionMethod, ok := result.Data["resolution_method"].(string); ok {
-						resultData["resolution_method"] = resolutionMethod
-					}
-				}
-				result.Data = resultData
-
-				if len(m.shared.Results) == 0 {
-					m.shared.Results = []core.ActionResult{result}
-				} else {
-					m.shared.Results = append(m.shared.Results, result)
-				}
+				// Store successful result (only once!)
+				m.shared.Results = append(m.shared.Results, result)
 
 				// Determine next step message
 				nextStepMsg := ""
