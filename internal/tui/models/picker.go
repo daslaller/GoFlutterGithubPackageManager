@@ -97,10 +97,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Err = nil
 	case tea.WindowSizeMsg:
 		// Pass window size to underlying filepicker
-		m.Filepicker.Height = msg.Height - 8
-		if m.Filepicker.Height < 10 {
-			m.Filepicker.Height = 10
-		}
+		m.Filepicker.SetHeight(max(msg.Height-8, 10))
 	}
 
 	var cmd tea.Cmd

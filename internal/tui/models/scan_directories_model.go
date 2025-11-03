@@ -181,8 +181,13 @@ func (m *ScanDirectoriesModel) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
+		// If no projects found, return to main menu
+		if len(m.projects) == 0 {
+			return m, TransitionToScreen(ScreenMainMenu)
+		}
+
 		// Select the current project and save to shared state
-		if len(m.projects) > 0 && m.selectedIndex >= 0 && m.selectedIndex < len(m.projects) {
+		if m.selectedIndex >= 0 && m.selectedIndex < len(m.projects) {
 			selectedProject := m.projects[m.selectedIndex]
 			m.shared.SourceProject = &selectedProject
 			m.shared.SourceProjectPath = selectedProject.Path

@@ -338,9 +338,8 @@ func (m *AppModel) transitionToScreen(screen AppScreen, data interface{}) (tea.M
 		return m, m.splash.Init()
 
 	case ScreenMainMenu:
-		if m.mainMenu == nil {
-			m.mainMenu = NewMainMenuModel(m.cfg, m.logger, m.SharedState)
-		}
+		// Always create a fresh main menu model to reset the timer
+		m.mainMenu = NewMainMenuModel(m.cfg, m.logger, m.SharedState)
 		return m, m.mainMenu.Init()
 
 	case ScreenPrerequisites:
