@@ -55,8 +55,8 @@ func CheckForUpdates(logger *Logger) (UpdateInfo, error) {
 		Available:      false,
 	}
 
-	// Fetch latest release from GitHub API
-	url := fmt.Sprintf("%s/repos/%s/releases/latest", GitHubAPIBase, GitHubRepoPath)
+	// Fetch all releases from GitHub API (returns array, first is latest)
+	url := fmt.Sprintf("%s/repos/%s/releases", GitHubAPIBase, GitHubRepoPath)
 	logger.Debug("selfupdate", fmt.Sprintf("Checking for updates at: %s", url))
 
 	resp, err := http.Get(url)
@@ -69,32 +69,49 @@ func CheckForUpdates(logger *Logger) (UpdateInfo, error) {
 		return info, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
 	}
 
-	var release GitHubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+	// Parse as array of releases (first element is latest)
+	var releases []GitHubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
 		return info, fmt.Errorf("failed to parse release info: %w", err)
 	}
+
+	if len(releases) == 0 {
+		return info, fmt.Errorf("no releases found")
+	}
+
+	// Get the latest release (first in array)
+	release := releases[0]
+	logger.Debug("selfupdate", fmt.Sprintf("Latest release: %s", release.TagName))
 
 	info.LatestVersion = release.TagName
 	info.ReleaseNotes = release.Body
 
-	// Compare versions (simple string comparison for now)
-	if release.TagName != CurrentVersion {
-		info.Available = true
+	// Compare versions to see if update is actually newer
+	info.Available = isNewerVersion(CurrentVersion, release.TagName)
+	if info.Available {
+		logger.Debug("selfupdate", fmt.Sprintf("Update available: %s -> %s", CurrentVersion, release.TagName))
+	} else {
+		logger.Debug("selfupdate", fmt.Sprintf("Already on latest version: %s", CurrentVersion))
+	}
 
-		// Find the appropriate asset for this platform
-		assetName := getAssetName()
-		for _, asset := range release.Assets {
-			if asset.Name == assetName {
-				info.DownloadURL = asset.BrowserDownloadURL
-				info.AssetName = asset.Name
-				logger.Debug("selfupdate", fmt.Sprintf("Found update: %s -> %s", CurrentVersion, release.TagName))
-				break
-			}
+	// Find the appropriate asset for this platform
+	assetName := getAssetName()
+	logger.Debug("selfupdate", fmt.Sprintf("Looking for asset: %s", assetName))
+	logger.Debug("selfupdate", fmt.Sprintf("Available assets: %d", len(release.Assets)))
+	
+	for i, asset := range release.Assets {
+		logger.Debug("selfupdate", fmt.Sprintf("  Asset %d: %s", i+1, asset.Name))
+		if asset.Name == assetName {
+			info.DownloadURL = asset.BrowserDownloadURL
+			info.AssetName = asset.Name
+			logger.Debug("selfupdate", fmt.Sprintf("Found update binary: %s", assetName))
+			logger.Debug("selfupdate", fmt.Sprintf("Download URL: %s", asset.BrowserDownloadURL))
+			break
 		}
+	}
 
-		if info.DownloadURL == "" {
-			return info, fmt.Errorf("no compatible binary found for %s/%s", runtime.GOOS, runtime.GOARCH)
-		}
+	if info.DownloadURL == "" {
+		return info, fmt.Errorf("no compatible binary found for %s/%s (looking for: %s)", runtime.GOOS, runtime.GOARCH, assetName)
 	}
 
 	return info, nil
@@ -188,6 +205,11 @@ func PerformUpdate(info UpdateInfo, logger *Logger) error {
 }
 
 // getAssetName returns the asset name for the current platform
+// Examples:
+//   - Windows 64-bit: flutter-pm-windows-amd64.exe
+//   - Linux 64-bit: flutter-pm-linux-amd64
+//   - macOS 64-bit: flutter-pm-darwin-amd64
+//   - macOS ARM64: flutter-pm-darwin-arm64
 func getAssetName() string {
 	var suffix string
 	if runtime.GOOS == "windows" {
@@ -231,6 +253,20 @@ func CompareVersions(v1, v2 string) int {
 		return -1
 	}
 	return 1
+}
+
+// isNewerVersion checks if the latest version is newer than the current version
+func isNewerVersion(current, latest string) bool {
+	// If they're the same, no update needed
+	if current == latest {
+		return false
+	}
+	
+	// Compare versions
+	comparison := CompareVersions(current, latest)
+	
+	// Return true if latest is greater than current (comparison < 0)
+	return comparison < 0
 }
 
 // GetExecutablePath returns the path of the current executable

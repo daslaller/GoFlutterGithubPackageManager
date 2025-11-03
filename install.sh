@@ -123,7 +123,7 @@ if [ "$OS" = "windows" ]; then
     BINARY_NAME="$BINARY_NAME.exe"
 fi
 
-DOWNLOAD_URL="https://github.com/daslaller/GoFlutterGithubPackageManager/releases/latest/download/$BINARY_NAME"
+DOWNLOAD_URL="https://github.com/daslaller/GoFlutterGithubPackageManager/releases/download/main/$BINARY_NAME"
 INSTALL_PATH="$INSTALL_DIR/flutter-pm"
 
 echo -e "${YELLOW}🌐 Downloading Flutter Package Manager...${NC}"

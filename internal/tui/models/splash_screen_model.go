@@ -34,6 +34,11 @@ type SplashScreenModel struct {
 	transitionDelay  int // seconds before auto-transition
 	showDetailedView bool
 
+	// Update check state
+	checkingUpdate bool
+	updateInfo     core.UpdateInfo
+	updateError    error
+
 	// Progress bar
 	progress progress.Model
 
@@ -60,6 +65,12 @@ type prerequisiteProgressMsg struct {
 
 // animationTickMsg is sent for animation updates
 type animationTickMsg struct{}
+
+// updateCheckCompleteMsg is sent when update check completes
+type updateCheckCompleteMsg struct {
+	info core.UpdateInfo
+	err  error
+}
 
 // NewSplashScreenModel creates a new splash screen model
 func NewSplashScreenModel(cfg core.Config, logger *core.Logger, shared *AppState) *SplashScreenModel {
@@ -109,6 +120,7 @@ func NewSplashScreenModel(cfg core.Config, logger *core.Logger, shared *AppState
 func (m *SplashScreenModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.checkPrerequisites(),
+		m.checkForUpdates(),
 		m.tickAnimation(),
 	)
 }
@@ -172,6 +184,20 @@ func (m *SplashScreenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 
+		return m, nil
+
+	case updateCheckCompleteMsg:
+		m.checkingUpdate = false
+		m.updateInfo = msg.info
+		m.updateError = msg.err
+
+		if msg.err != nil {
+			m.logger.Debug("splash", fmt.Sprintf("Update check failed: %v", msg.err))
+		} else if msg.info.Available {
+			m.logger.Info("splash", fmt.Sprintf("Update available: %s -> %s", msg.info.CurrentVersion, msg.info.LatestVersion))
+		} else {
+			m.logger.Debug("splash", "Already on latest version")
+		}
 		return m, nil
 
 	case animationTickMsg:
@@ -272,6 +298,15 @@ func (m *SplashScreenModel) View() string {
 		// Auto-transition message
 		b.WriteString(m.subtitleStyle.Render("Starting in a moment... (press enter to continue now)"))
 		b.WriteString("\n")
+
+		// Show update notification if available
+		if m.updateInfo.Available {
+			b.WriteString("\n")
+			b.WriteString(m.warningStyle.Render(fmt.Sprintf("✨ Update available: %s -> %s", m.updateInfo.CurrentVersion, m.updateInfo.LatestVersion)))
+			b.WriteString("\n")
+			b.WriteString(m.subtitleStyle.Render("   Use main menu option 'Check for Flutter-PM updates' to update"))
+			b.WriteString("\n")
+		}
 	}
 
 	// Help text
@@ -330,4 +365,12 @@ func (m *SplashScreenModel) tickAnimation() tea.Cmd {
 	return tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
 		return animationTickMsg{}
 	})
+}
+
+// checkForUpdates runs the update check in the background
+func (m *SplashScreenModel) checkForUpdates() tea.Cmd {
+	return func() tea.Msg {
+		info, err := core.CheckForUpdates(m.logger)
+		return updateCheckCompleteMsg{info: info, err: err}
+	}
 }
