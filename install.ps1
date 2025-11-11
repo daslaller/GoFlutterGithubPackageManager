@@ -51,7 +51,7 @@ if ($existingInstall -and -not $Force) {
         Write-Host "🚀 Run 'flutter-pm' to start!" -ForegroundColor Green
         Write-Host ""
         Write-Host "💡 To force update later, run:" -ForegroundColor Yellow
-        Write-Host "   iwr -useb https://raw.githubusercontent.com/daslaller/GoFlutterGithubPackageManager/main/install.ps1 | iex" -ForegroundColor Gray
+        Write-Host "   iwr -useb https://raw.githubusercontent.com/daslaller/GoFlutterGithubPackageManager/refs/heads/master/install.ps1 | iex" -ForegroundColor Gray
         Write-Host ""
         Write-Host "Press any key to exit..." -ForegroundColor Gray
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
