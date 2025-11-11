@@ -1,5 +1,5 @@
 ﻿# Flutter Package Manager (Go) - Windows Installer
-# One-line install: iwr -useb https://raw.githubusercontent.com/daslaller/GoFlutterGithubPackageManager/main/install.ps1 | iex
+# One-line install: iwr -useb https://raw.githubusercontent.com/daslaller/GoFlutterGithubPackageManager/refs/heads/master/install.ps1 | iex
 
 param(
     [switch]$Force = $false,
