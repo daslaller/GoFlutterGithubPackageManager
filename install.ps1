@@ -67,7 +67,7 @@ if (-not (Test-Path $InstallDir)) {
 
 # Determine architecture
 $arch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { "386" }
-$downloadUrl = "https://github.com/daslaller/GoFlutterGithubPackageManager/releases/download/main/flutter-pm-windows-$arch.exe"
+$downloadUrl = "https://github.com/daslaller/GoFlutterGithubPackageManager/releases/download/v1.0.0-alpha/flutter-pm-windows-$arch.exe"
 
 Write-Host "🌐 Downloading Flutter Package Manager..." -ForegroundColor Yellow
 Write-Host "   Source: $downloadUrl" -ForegroundColor Gray
