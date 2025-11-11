@@ -1,4 +1,4 @@
-﻿# Flutter Package Manager (Go) - Windows Installer
+﻿# Flutter Package Manager (Go) - Windows Installer - Encoded UTF-8 with BOM
 # One-line install: iwr -useb https://raw.githubusercontent.com/daslaller/GoFlutterGithubPackageManager/refs/heads/master/install.ps1 | iex
 
 param(
