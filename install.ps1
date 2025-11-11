@@ -8,6 +8,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Helper function to safely wait for key press
+function Wait-ForKeyPress {
+    try {
+        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    } catch {
+        # ReadKey not supported in this host (e.g., non-interactive environments)
+        # Just continue without waiting
+    }
+}
+
 # ASCII Art Header
 Write-Host @"
 ╔══════════════════════════════════════════════════════════════╗
@@ -54,7 +64,7 @@ if ($existingInstall -and -not $Force) {
         Write-Host "   iwr -useb https://raw.githubusercontent.com/daslaller/GoFlutterGithubPackageManager/refs/heads/master/install.ps1 | iex" -ForegroundColor Gray
         Write-Host ""
         Write-Host "Press any key to exit..." -ForegroundColor Gray
-        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        Wait-ForKeyPress
         exit 0
     }
 }
@@ -99,7 +109,7 @@ try {
     Write-Host "💡 You can also download manually and place in: $InstallDir" -ForegroundColor Gray
     Write-Host ""
     Write-Host "Press any key to exit..." -ForegroundColor Gray
-    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    Wait-ForKeyPress
     exit 1
 }
 
@@ -160,4 +170,4 @@ Write-Host "🔗 Documentation: https://github.com/daslaller/GoFlutterGithubPack
 Write-Host "🐛 Issues: https://github.com/daslaller/GoFlutterGithubPackageManager/issues" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Press any key to exit..." -ForegroundColor Gray
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+Wait-ForKeyPress
