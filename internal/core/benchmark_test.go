@@ -1,15 +1,8 @@
 // Package core benchmark tests - Go standard benchmark suite for performance regression detection
 //
-// This file provides comprehensive benchmarks for all performance-critical operations
+// This file provides benchmarks for performance-critical operations
 // in the Flutter Package Manager. These benchmarks can be run with `go test -bench=.`
 // to detect performance regressions and validate optimizations.
-//
-// Key benchmarks:
-// - BenchmarkProjectDiscovery: Tests concurrent project scanning
-// - BenchmarkGitHubAPICaching: Tests GitHub API cache effectiveness
-// - BenchmarkGitLsRemoteCaching: Tests Git operation caching
-// - BenchmarkPubspecParsing: Tests pubspec.yaml parsing performance
-// - BenchmarkStringBuilderRendering: Tests UI rendering optimizations
 
 package core
 
@@ -43,34 +36,13 @@ func BenchmarkProjectDiscoverySmall(b *testing.B) {
 	}
 }
 
-// BenchmarkGitHubAPICache benchmarks GitHub API caching performance
-func BenchmarkGitHubAPICache(b *testing.B) {
-	cfg := &Config{Debug: false, Quiet: true}
-	logger := NewLogger(cfg)
-
-	// Pre-warm cache
-	_, err := ListGitHubRepos(logger)
-	if err != nil {
-		b.Skip("GitHub API not available, skipping benchmark")
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := ListGitHubRepos(logger)
-		if err != nil {
-			b.Fatalf("ListGitHubRepos failed: %v", err)
-		}
-	}
-}
-
-// BenchmarkGitHubAPICacheFirst benchmarks first GitHub API call (no cache)
-func BenchmarkGitHubAPICacheFirst(b *testing.B) {
+// BenchmarkGitHubAPI benchmarks GitHub API call performance
+func BenchmarkGitHubAPI(b *testing.B) {
 	cfg := &Config{Debug: false, Quiet: true}
 	logger := NewLogger(cfg)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		githubCache.InvalidateCache()
 		_, err := ListGitHubRepos(logger)
 		if err != nil {
 			b.Skip("GitHub API not available, skipping benchmark")
@@ -78,38 +50,13 @@ func BenchmarkGitHubAPICacheFirst(b *testing.B) {
 	}
 }
 
-// BenchmarkGitLsRemoteCache benchmarks Git ls-remote caching
-func BenchmarkGitLsRemoteCache(b *testing.B) {
-	url := "https://github.com/flutter/flutter.git"
-	ref := "main"
-
-	// Pre-warm cache
-	_, err := GitLsRemote(url, ref)
-	if err != nil {
-		b.Skip("Git ls-remote not available, skipping benchmark")
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := GitLsRemote(url, ref)
-		if err != nil {
-			b.Fatalf("GitLsRemote failed: %v", err)
-		}
-	}
-}
-
-// BenchmarkGitLsRemoteFirst benchmarks first Git ls-remote call (no cache)
-func BenchmarkGitLsRemoteFirst(b *testing.B) {
+// BenchmarkGitLsRemote benchmarks Git ls-remote performance
+func BenchmarkGitLsRemote(b *testing.B) {
 	url := "https://github.com/flutter/flutter.git"
 	ref := "main"
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		// Clear cache for each iteration
-		gitLsRemoteCache.mu.Lock()
-		gitLsRemoteCache.cache = make(map[string]string)
-		gitLsRemoteCache.mu.Unlock()
-
 		_, err := GitLsRemote(url, ref)
 		if err != nil {
 			b.Skip("Git ls-remote not available, skipping benchmark")
@@ -117,8 +64,8 @@ func BenchmarkGitLsRemoteFirst(b *testing.B) {
 	}
 }
 
-// BenchmarkStaleCheckCache benchmarks stale dependency cache effectiveness
-func BenchmarkStaleCheckCache(b *testing.B) {
+// BenchmarkPubspecParsing benchmarks pubspec.lock parsing performance
+func BenchmarkPubspecParsing(b *testing.B) {
 	cfg := &Config{Debug: false, Quiet: true}
 	logger := NewLogger(cfg)
 
@@ -130,17 +77,11 @@ func BenchmarkStaleCheckCache(b *testing.B) {
 
 	projectPath := projects[0].Path
 
-	// Pre-warm cache
-	_, err = CheckStalePrecise(logger, projectPath)
-	if err != nil {
-		b.Skip("Stale check not available, skipping benchmark")
-	}
-
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := CheckStalePrecise(logger, projectPath)
 		if err != nil {
-			b.Fatalf("CheckStalePrecise failed: %v", err)
+			b.Skip("Stale check not available, skipping benchmark")
 		}
 	}
 }
@@ -228,7 +169,6 @@ func BenchmarkStringConcatenation(b *testing.B) {
 
 // BenchmarkMenuRendering benchmarks optimized menu rendering pattern
 func BenchmarkMenuRendering(b *testing.B) {
-	// Simulate the menu rendering pattern from MainMenuModel
 	menuLines := make([]string, 0, 20)
 	var renderBuffer strings.Builder
 	renderBuffer.Grow(1024)
@@ -243,16 +183,13 @@ func BenchmarkMenuRendering(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		// Reset buffers (simulating optimized View() method)
 		renderBuffer.Reset()
 		menuLines = menuLines[:0]
 
-		// Header
 		menuLines = append(menuLines, "🎯 Flutter Package Manager")
 		menuLines = append(menuLines, "")
 		menuLines = append(menuLines, "📱 Flutter Package Manager - Main Menu:")
 
-		// Menu options
 		for j, option := range options {
 			line := "  " + string(rune(j+1+'0')) + ". " + emojis[j] + " " + option
 			menuLines = append(menuLines, line)
@@ -261,7 +198,6 @@ func BenchmarkMenuRendering(b *testing.B) {
 		menuLines = append(menuLines, "")
 		menuLines = append(menuLines, "↑/↓ navigate • enter select • q quit")
 
-		// Join efficiently
 		for k, line := range menuLines {
 			if k > 0 {
 				renderBuffer.WriteByte('\n')
@@ -270,17 +206,6 @@ func BenchmarkMenuRendering(b *testing.B) {
 		}
 
 		_ = renderBuffer.String()
-	}
-}
-
-// BenchmarkCacheWarming benchmarks background cache warming
-func BenchmarkCacheWarming(b *testing.B) {
-	cfg := &Config{Debug: false, Quiet: true}
-	logger := NewLogger(cfg)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		WarmCachesSync(logger, cfg)
 	}
 }
 

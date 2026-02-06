@@ -50,14 +50,8 @@ func CheckStaleHeuristic(projectPath string) (bool, string, error) {
 	return age > staleThreshold, lockPath, nil
 }
 
-// CheckStalePrecise performs precise stale checking with intelligent caching
+// CheckStalePrecise performs precise stale checking by comparing local vs upstream SHAs
 func CheckStalePrecise(logger *Logger, projectPath string) ([]StaleInfo, error) {
-	// Check cache first
-	if cached := staleCache.Get(projectPath); cached != nil {
-		logger.Debug("stale", "Using cached stale check results")
-		return cached, nil
-	}
-
 	lockPath := filepath.Join(projectPath, "pubspec.lock")
 
 	// Parse pubspec.lock
@@ -136,9 +130,6 @@ func CheckStalePrecise(logger *Logger, projectPath string) ([]StaleInfo, error) 
 		}
 	}
 
-	// Cache the results
-	staleCache.Set(projectPath, staleInfo)
-
 	return staleInfo, nil
 }
 
@@ -150,26 +141,6 @@ var (
 	}
 )
 
-// StaleCheckCache provides intelligent caching for stale dependency checks
-type StaleCheckCache struct {
-	mu    sync.RWMutex
-	cache map[string]CachedStaleInfo
-	ttl   time.Duration
-}
-
-// CachedStaleInfo represents cached stale information with expiry
-type CachedStaleInfo struct {
-	Info   []StaleInfo
-	Expiry time.Time
-	Hash   string // Hash of pubspec.yaml + pubspec.lock for invalidation
-}
-
-var (
-	staleCache = &StaleCheckCache{
-		cache: make(map[string]CachedStaleInfo),
-		ttl:   10 * time.Minute, // Cache for 10 minutes
-	}
-)
 
 // parsePubspecLock parses the pubspec.lock file with optimized I/O
 func parsePubspecLock(lockPath string) (*PubspecLock, error) {
@@ -253,73 +224,6 @@ func parsePubspecLock(lockPath string) (*PubspecLock, error) {
 	return lock, nil
 }
 
-// Get returns cached stale info if still valid
-func (c *StaleCheckCache) Get(projectPath string) []StaleInfo {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	cached, exists := c.cache[projectPath]
-	if !exists || time.Now().After(cached.Expiry) {
-		return nil
-	}
-
-	// Check if files have changed by comparing hash
-	currentHash := c.generateProjectHash(projectPath)
-	if currentHash != cached.Hash {
-		return nil
-	}
-
-	return cached.Info
-}
-
-// Set caches the stale info with expiry
-func (c *StaleCheckCache) Set(projectPath string, info []StaleInfo) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	hash := c.generateProjectHash(projectPath)
-	c.cache[projectPath] = CachedStaleInfo{
-		Info:   info,
-		Expiry: time.Now().Add(c.ttl),
-		Hash:   hash,
-	}
-
-	// Start cleanup timer
-	go c.cleanupAfterTTL(projectPath)
-}
-
-// generateProjectHash creates a hash of pubspec files for cache invalidation
-func (c *StaleCheckCache) generateProjectHash(projectPath string) string {
-	pubspecPath := filepath.Join(projectPath, "pubspec.yaml")
-	lockPath := filepath.Join(projectPath, "pubspec.lock")
-
-	var hashBuilder strings.Builder
-
-	// Include modification times of both files
-	if info, err := os.Stat(pubspecPath); err == nil {
-		hashBuilder.WriteString(info.ModTime().Format(time.RFC3339Nano))
-	}
-	if info, err := os.Stat(lockPath); err == nil {
-		hashBuilder.WriteString(info.ModTime().Format(time.RFC3339Nano))
-	}
-
-	return hashBuilder.String()
-}
-
-// cleanupAfterTTL removes cache entry after TTL expires
-func (c *StaleCheckCache) cleanupAfterTTL(projectPath string) {
-	time.Sleep(c.ttl + time.Minute) // Extra minute buffer
-	c.mu.Lock()
-	delete(c.cache, projectPath)
-	c.mu.Unlock()
-}
-
-// InvalidateProject removes cached data for a specific project
-func (c *StaleCheckCache) InvalidateProject(projectPath string) {
-	c.mu.Lock()
-	delete(c.cache, projectPath)
-	c.mu.Unlock()
-}
 
 // extractValue extracts the value from a YAML line like "key: value"
 func extractValue(line, key string) string {

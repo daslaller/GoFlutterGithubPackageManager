@@ -331,6 +331,23 @@ func analyzeDependencyConflict(output string, err error) ConflictAnalysis {
 	// Extract conflicting package name if possible
 	conflictingPkg := extractConflictingPackageName(originalOutput)
 
+	// Name mismatch detection (check first - this is a stale pub cache issue)
+	// Error pattern: "name" field doesn't match expected name "X"
+	// Root cause: dart pub caches git repos locally and uses stale pubspec.yaml
+	if strings.Contains(lowerOutput, "\"name\" field doesn't match expected name") ||
+		strings.Contains(lowerOutput, "name field doesn't match") ||
+		(strings.Contains(lowerOutput, "doesn't match expected name") && strings.Contains(lowerOutput, "name")) {
+		return ConflictAnalysis{
+			ConflictType:    "name_mismatch",
+			SubType:         "stale_pub_cache",
+			IsRecoverable:   true,
+			SuggestedFix:    "Clear dart pub git cache and retry",
+			UserMessage:     "Package name mismatch due to stale dart pub cache - clearing cache and retrying",
+			ConflictingPkg:  conflictingPkg,
+			ResolutionSteps: []string{"Run dart pub cache clean", "Retry package addition"},
+		}
+	}
+
 	// SDK constraint violations (check first, as they often include "version solving failed")
 	if (strings.Contains(lowerOutput, "sdk constraint") ||
 		strings.Contains(lowerOutput, "requires sdk") ||
@@ -438,6 +455,12 @@ func analyzeDependencyConflict(output string, err error) ConflictAnalysis {
 // attemptConflictResolution tries to resolve dependency conflicts automatically with enhanced strategies
 func attemptConflictResolution(logger *Logger, cfg *Config, projectPath string, spec PkgSpec, analysis ConflictAnalysis) ActionResult {
 	logger.Info("pub", fmt.Sprintf("🔧 Starting resolution for %s conflict (subtype: %s)", analysis.ConflictType, analysis.SubType))
+
+	// Name mismatch: clear dart pub cache and retry
+	if analysis.ConflictType == "name_mismatch" {
+		logger.Info("pub", "🔧 Repairing dart pub git cache to resolve stale package name...")
+		return resolveNameMismatchWithCacheRepair(logger, cfg, projectPath, spec)
+	}
 
 	// For all recoverable conflicts, try using inline dependency overrides in the dart pub add command
 	if analysis.IsRecoverable && analysis.ConflictingPkg != "" {
@@ -567,8 +590,15 @@ func resolveWithInlineOverride(logger *Logger, cfg *Config, projectPath string, 
 	}
 }
 
-// addGitDependencyWithoutConflictResolution adds a git dependency without conflict resolution (to avoid recursion)
-func addGitDependencyWithoutConflictResolution(logger *Logger, cfg *Config, projectPath string, spec PkgSpec) ActionResult {
+// resolveNameMismatchWithCacheRepair repairs the dart pub git cache and retries the package addition
+// This fixes the common issue where dart pub uses a stale cached clone of a git repo
+// that has an old package name in pubspec.yaml
+//
+// Strategy:
+// 1. First try `pub cache repair` - resets all git repos to their correct state without deleting everything
+// 2. Retry the pub add command
+// 3. If still failing, try `pub cache clean --force` as nuclear option, then retry once more
+func resolveNameMismatchWithCacheRepair(logger *Logger, cfg *Config, projectPath string, spec PkgSpec) ActionResult {
 	tool, err := FindPubTool()
 	if err != nil {
 		return ActionResult{
@@ -577,53 +607,128 @@ func addGitDependencyWithoutConflictResolution(logger *Logger, cfg *Config, proj
 		}
 	}
 
-	// Use the pre-fetched package name from spec.Name
-	// The package name was already fetched during configuration phase
-	actualName := spec.Name
-	logger.Debug("pub", fmt.Sprintf("Using pre-fetched package name: %s", actualName))
+	var allLogs []string
 
-	// Build command arguments
-	args := []string{"pub", "add", actualName, "--git-url", spec.URL}
-	if spec.Ref != "" && spec.Ref != "main" {
-		args = append(args, "--git-ref", spec.Ref)
+	// Step 1: Try pub cache repair first (resets git repos without nuking everything)
+	logger.Info("pub", fmt.Sprintf("Running: %s pub cache repair", tool))
+	repairCmd := exec.Command(tool, "pub", "cache", "repair")
+	repairCmd.Dir = projectPath
+	repairCmd.Stdin = nil
+	repairOutput, repairErr := repairCmd.CombinedOutput()
+	repairOutputStr := strings.TrimSpace(string(repairOutput))
+	allLogs = append(allLogs, fmt.Sprintf("Cache repair: %s", repairOutputStr))
+
+	if repairErr != nil {
+		logger.Info("pub", fmt.Sprintf("Cache repair warning: %s (continuing anyway)", repairErr.Error()))
+	} else {
+		logger.Info("pub", "✅ Dart pub cache repair completed")
+	}
+
+	// Step 2: Retry the package addition
+	logger.Info("pub", "🔄 Retrying package addition after cache repair...")
+	retryResult := retryPubAddWithoutConflictResolution(logger, tool, projectPath, spec)
+	allLogs = append(allLogs, retryResult.Logs...)
+
+	if retryResult.OK {
+		logger.Info("pub", fmt.Sprintf("✅ Package %s successfully added after cache repair", spec.Name))
+		retryResult.Data = map[string]interface{}{
+			"conflict_resolved": true,
+			"conflict_type":     "name_mismatch",
+			"resolution_method": "pub_cache_repair",
+			"package_name":      spec.Name,
+		}
+		retryResult.Logs = allLogs
+		return retryResult
+	}
+
+	// Step 3: Nuclear option - pub cache clean --force
+	logger.Info("pub", "Cache repair didn't fix the issue, trying nuclear option: pub cache clean --force")
+	cleanCmd := exec.Command(tool, "pub", "cache", "clean", "--force")
+	cleanCmd.Dir = projectPath
+	cleanCmd.Stdin = nil
+	cleanOutput, cleanErr := cleanCmd.CombinedOutput()
+	cleanOutputStr := strings.TrimSpace(string(cleanOutput))
+	allLogs = append(allLogs, fmt.Sprintf("Cache clean: %s", cleanOutputStr))
+
+	if cleanErr != nil {
+		logger.Info("pub", fmt.Sprintf("Cache clean warning: %s (continuing anyway)", cleanErr.Error()))
+	} else {
+		logger.Info("pub", "✅ Dart pub cache cleaned")
+	}
+
+	// Step 4: Final retry after nuclear clean
+	logger.Info("pub", "🔄 Final retry after cache clean...")
+	finalResult := retryPubAddWithoutConflictResolution(logger, tool, projectPath, spec)
+	allLogs = append(allLogs, finalResult.Logs...)
+
+	if finalResult.OK {
+		logger.Info("pub", fmt.Sprintf("✅ Package %s successfully added after cache clean", spec.Name))
+		finalResult.Data = map[string]interface{}{
+			"conflict_resolved": true,
+			"conflict_type":     "name_mismatch",
+			"resolution_method": "pub_cache_clean",
+			"package_name":      spec.Name,
+		}
+		finalResult.Logs = allLogs
+		return finalResult
+	}
+
+	logger.Info("pub", "❌ Name mismatch persists after both cache repair and clean - manual intervention required")
+	finalResult.Logs = allLogs
+	return finalResult
+}
+
+// retryPubAddWithoutConflictResolution retries a pub add command without entering conflict resolution
+// This prevents infinite recursion when resolving name mismatch errors
+func retryPubAddWithoutConflictResolution(logger *Logger, tool string, projectPath string, spec PkgSpec) ActionResult {
+	actualName := spec.Name
+
+	gitSpec := fmt.Sprintf(`{git:{url: %s`, spec.URL)
+	if spec.Ref != "" {
+		gitSpec += fmt.Sprintf(`, ref: %s`, spec.Ref)
 	}
 	if spec.Subdir != "" {
-		args = append(args, "--git-path", spec.Subdir)
+		gitSpec += fmt.Sprintf(`, path: %s`, spec.Subdir)
 	}
+	gitSpec += fmt.Sprintf(`}, version: any}`)
 
-	logger.LogCommand("pub", tool, args)
+	packageArg := fmt.Sprintf(`"%s:%s"`, actualName, gitSpec)
+	args := []string{"pub", "add", packageArg}
 
-	if cfg.DryRun {
-		return ActionResult{
-			OK:      true,
-			Message: fmt.Sprintf("Would execute: %s %s", tool, strings.Join(args, " ")),
-			Logs:    []string{fmt.Sprintf("DRY RUN: %s %s", tool, strings.Join(args, " "))},
-		}
+	cmdParts := []string{tool}
+	cmdParts = append(cmdParts, args...)
+	cmdStr := strings.Join(cmdParts, " ")
+
+	logger.Info("pub", fmt.Sprintf("Executing: %s", cmdStr))
+
+	cmd := exec.Command(tool)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CmdLine: cmdStr,
 	}
-
-	// Execute the command (no conflict resolution on retry)
-	cmd := exec.Command(tool, args...)
 	cmd.Dir = projectPath
 	cmd.Stdin = nil
 
 	output, err := cmd.CombinedOutput()
 	outputStr := strings.TrimSpace(string(output))
-	logs := []string{outputStr}
+	logs := []string{
+		fmt.Sprintf("Command: %s", cmdStr),
+		fmt.Sprintf("Output: %s", outputStr),
+	}
 
 	if err != nil {
-		// No conflict resolution on retry - just return the error
+		logger.Info("pub", fmt.Sprintf("Retry failed: %s", err.Error()))
+		logger.Info("pub", fmt.Sprintf("Output: %s", outputStr))
 		return ActionResult{
 			OK:   false,
-			Err:  fmt.Sprintf("Retry failed: %s", err.Error()),
+			Err:  fmt.Sprintf("Name mismatch persists: %s", err.Error()),
 			Logs: logs,
 		}
 	}
 
-	// Wait for file locks and return success
 	time.Sleep(500 * time.Millisecond)
 	return ActionResult{
 		OK:      true,
-		Message: fmt.Sprintf("Successfully added %s", actualName),
+		Message: fmt.Sprintf("Successfully added %s after cache reset", actualName),
 		Logs:    logs,
 	}
 }
