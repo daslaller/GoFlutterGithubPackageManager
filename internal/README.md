@@ -44,7 +44,7 @@ The core package contains all business logic and shell script parity implementat
 ### Git Operations
 - **`git.go`** - Git Operations and GitHub CLI Integration
   - GitHub CLI integration for repository listing and authentication
-  - FetchPackageNameFromGit: Robust 4-tier fallback chain (gh api -> HTTP -> alt branches -> repo name)
+  - FetchPackageNameFromGit: Robust 4-tier fallback chain (gh api -> HTTP -> alt branches -> repo name fallback with error)
   - Git clone operations with proper error handling and conflict resolution
   - Git version checking and command availability validation
   - SHA-based comparison for precise dependency staleness detection

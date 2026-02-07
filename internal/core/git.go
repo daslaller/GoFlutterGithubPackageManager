@@ -24,6 +24,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -381,7 +382,7 @@ func (c *PackageNameCache) InvalidateAll() {
 // 2. Primary: GitHub CLI API (works for public and private repos if authenticated)
 // 3. Fallback 1: Direct HTTP GET from raw.githubusercontent.com (public repos only)
 // 4. Fallback 2: Try alternative branch names (main, master, develop)
-// 5. Final fallback: Use repository name as package name
+// 5. Final fallback: Use repository name as package name (returned with error to mark unverified)
 func FetchPackageNameFromGit(logger *Logger, gitURL string, ref string, subdir string) (string, error) {
 	// Only supports GitHub repos
 	if !strings.Contains(gitURL, "github.com") {
@@ -424,12 +425,15 @@ func FetchPackageNameFromGit(logger *Logger, gitURL string, ref string, subdir s
 		branch = "main"
 	}
 
+	var lastErr error
+
 	// METHOD 1: Try gh api (best method - works for public and private repos)
 	if packageName, err := fetchPackageNameViaGhAPI(logger, ownerRepo, pubspecPath); err == nil {
 		logger.Info("git", fmt.Sprintf("✓ Found package name via gh api: %s", packageName))
 		packageNameCache.Set(cacheKey, packageName)
 		return packageName, nil
 	} else {
+		lastErr = err
 		logger.Info("git", fmt.Sprintf("✗ gh api method failed: %s", err.Error()))
 	}
 
@@ -439,6 +443,7 @@ func FetchPackageNameFromGit(logger *Logger, gitURL string, ref string, subdir s
 		packageNameCache.Set(cacheKey, packageName)
 		return packageName, nil
 	} else {
+		lastErr = err
 		logger.Info("git", fmt.Sprintf("✗ HTTP method failed for branch '%s': %s", branch, err.Error()))
 	}
 
@@ -452,6 +457,8 @@ func FetchPackageNameFromGit(logger *Logger, gitURL string, ref string, subdir s
 			logger.Info("git", fmt.Sprintf("✓ Found package name via HTTP (alternative branch: %s): %s", altBranch, packageName))
 			packageNameCache.Set(cacheKey, packageName)
 			return packageName, nil
+		} else {
+			lastErr = err
 		}
 	}
 
@@ -460,8 +467,12 @@ func FetchPackageNameFromGit(logger *Logger, gitURL string, ref string, subdir s
 	if slashIdx := strings.LastIndex(ownerRepo, "/"); slashIdx != -1 {
 		repoName = ownerRepo[slashIdx+1:]
 	}
-	logger.Info("git", fmt.Sprintf("⚠ All methods failed, using repository name as package name: %s", repoName))
-	return repoName, nil
+	if lastErr == nil {
+		lastErr = errors.New("no error details captured")
+	}
+	fallbackErr := fmt.Errorf("package name lookup failed for %s; using unverified repo name %q: %w", ownerRepo, repoName, lastErr)
+	logger.Info("git", fmt.Sprintf("⚠ %s", fallbackErr.Error()))
+	return repoName, fallbackErr
 }
 
 // fetchPackageNameViaGhAPI uses GitHub CLI to fetch pubspec.yaml (works for public and private repos)

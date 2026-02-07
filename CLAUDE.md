@@ -47,7 +47,7 @@ The `FetchPackageNameFromGit` function uses a robust fallback chain to fetch the
 
 4. **Final Fallback**: Repository name
    - If all methods fail, uses the repository name as the package name
-   - Ensures the operation can continue even if package name can't be determined
+   - Returns an error to mark the name as **unverified** (callers must not rewrite pubspec.yaml based on it)
 
 **YAML Parsing**: Uses `gopkg.in/yaml.v3` for robust YAML parsing, avoiding fragile regex-based parsing. The parser extracts only the `name:` field from pubspec.yaml content.
 
@@ -399,6 +399,8 @@ go run scripts/run_terminal_tests.go
 - Tests save actual terminal frames to files for manual inspection
 - Critical tests verify option 3 shows search configuration, not package configuration
 - Use `go test -v ./internal/tui/testing` to run all TUI validation tests
+- When touching package-name resolution, simulate a fetch failure and confirm
+  `fixLocalPubspecNameMismatches` does not rewrite dependency keys.
 
 ### Integration Testing
 The application includes integration with the shell scripts:
