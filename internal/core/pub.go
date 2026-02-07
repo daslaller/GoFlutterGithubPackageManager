@@ -232,16 +232,42 @@ func AddGitDependency(logger *Logger, cfg *Config, projectPath string, spec PkgS
 			if autoResolve {
 				// Attempt resolution
 				if resolvedResult := attemptConflictResolution(logger, cfg, projectPath, spec, conflictAnalysis); resolvedResult.OK {
-					// Success - add detailed resolution info to result
-					resolvedResult.Data = map[string]interface{}{
-						"conflict_resolved": true,
-						"conflict_type":     conflictAnalysis.ConflictType,
-						"conflicting_pkg":   conflictAnalysis.ConflictingPkg,
-						"resolution_method": "inline_dependency_override",
-						"user_message":      fmt.Sprintf("Successfully resolved %s conflict with %s", conflictAnalysis.ConflictType, conflictAnalysis.ConflictingPkg),
+					// Success - preserve resolution metadata set by the resolver
+					if resolvedResult.Data == nil {
+						resolvedResult.Data = map[string]interface{}{}
+					}
+					resolutionMethod, _ := resolvedResult.Data["resolution_method"].(string)
+					if resolutionMethod == "" {
+						resolutionMethod = "inline_dependency_override"
+						resolvedResult.Data["resolution_method"] = resolutionMethod
+					}
+					if _, ok := resolvedResult.Data["conflict_type"]; !ok {
+						resolvedResult.Data["conflict_type"] = conflictAnalysis.ConflictType
+					}
+					if _, ok := resolvedResult.Data["conflicting_pkg"]; !ok {
+						resolvedResult.Data["conflicting_pkg"] = conflictAnalysis.ConflictingPkg
+					}
+					resolvedResult.Data["conflict_resolved"] = true
+					if _, ok := resolvedResult.Data["user_message"]; !ok {
+						userMessage := fmt.Sprintf("Successfully resolved %s conflict", conflictAnalysis.ConflictType)
+						if conflictAnalysis.ConflictingPkg != "" {
+							userMessage = fmt.Sprintf("Successfully resolved %s conflict with %s", conflictAnalysis.ConflictType, conflictAnalysis.ConflictingPkg)
+						}
+						resolvedResult.Data["user_message"] = userMessage
 					}
 					logger.Info("pub", fmt.Sprintf("✅ Conflict resolved! %s has been successfully added", actualName))
-					logger.Info("pub", fmt.Sprintf("🛠️  Resolution: Used dependency override for %s", conflictAnalysis.ConflictingPkg))
+					switch resolutionMethod {
+					case "inline_dependency_override":
+						logger.Info("pub", fmt.Sprintf("🛠️  Resolution: Used dependency override for %s", conflictAnalysis.ConflictingPkg))
+					case "pubspec_name_fix":
+						logger.Info("pub", "🛠️  Resolution: Fixed local pubspec name mismatch")
+					case "pub_cache_repair":
+						logger.Info("pub", "🛠️  Resolution: Repaired dart pub cache")
+					case "pub_cache_clean":
+						logger.Info("pub", "🛠️  Resolution: Cleaned dart pub cache")
+					default:
+						logger.Info("pub", fmt.Sprintf("🛠️  Resolution: %s", resolutionMethod))
+					}
 					return resolvedResult
 				}
 

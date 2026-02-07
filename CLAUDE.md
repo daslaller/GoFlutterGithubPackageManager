@@ -118,6 +118,8 @@ The most common and hardest-to-diagnose error is: `"name" field doesn't match ex
 - `resolveNameMismatch()`: Orchestrates the full 4-step resolution
 - `retryPubAddWithoutConflictResolution()`: Retries without entering conflict resolution (prevents infinite recursion)
 
+**Resolution metadata is source-of-truth:** `AddGitDependency` must preserve the `ActionResult.Data` fields set by resolution functions (especially `resolution_method` and `pubspec_fixes_applied`) and should only fill missing fields. Do not overwrite name-mismatch metadata with inline override defaults.
+
 #### Dependency Conflict Resolution (pub.go)
 
 The `AddGitDependency` function includes intelligent dependency conflict detection and resolution for exit code 65 errors. After solving name mismatch issues, remaining exit code 65 errors are legitimate dependency conflicts that require smart handling.
@@ -404,6 +406,7 @@ go run scripts/run_terminal_tests.go
 - Use `go test -v ./internal/tui/testing` to run all TUI validation tests
 - When touching package-name resolution, simulate a fetch failure and confirm
   `fixLocalPubspecNameMismatches` does not rewrite dependency keys.
+- When changing conflict resolution metadata, verify `ActionResult.Data` preserves resolver `resolution_method` (name mismatch vs inline override) via a targeted unit test or a manual run with a known name mismatch case.
 
 ### Integration Testing
 The application includes integration with the shell scripts:
