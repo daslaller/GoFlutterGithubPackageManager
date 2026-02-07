@@ -318,20 +318,26 @@ type GitHubPackageNameResult struct {
 // Package names rarely change, so we cache them for 15 minutes to speed up
 // repeated lookups during configuration and name mismatch resolution
 type PackageNameCache struct {
-	mu    sync.RWMutex
-	cache map[string]cachedPackageName
-	ttl   time.Duration
+	mu            sync.RWMutex
+	cache         map[string]cachedPackageName
+	timers        map[string]*time.Timer
+	ttl           time.Duration
+	cleanupBuffer time.Duration
+	nextToken     uint64
 }
 
 type cachedPackageName struct {
 	name   string
 	expiry time.Time
+	token  uint64
 }
 
 var (
 	packageNameCache = &PackageNameCache{
-		cache: make(map[string]cachedPackageName),
-		ttl:   15 * time.Minute, // Package names rarely change
+		cache:         make(map[string]cachedPackageName),
+		timers:        make(map[string]*time.Timer),
+		ttl:           15 * time.Minute, // Package names rarely change
+		cleanupBuffer: time.Minute,
 	}
 )
 
@@ -352,25 +358,65 @@ func (c *PackageNameCache) Set(key, name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	c.nextToken++
+	token := c.nextToken
 	c.cache[key] = cachedPackageName{
 		name:   name,
 		expiry: time.Now().Add(c.ttl),
+		token:  token,
 	}
 
-	// Start cleanup timer
-	go func() {
-		time.Sleep(c.ttl + time.Minute)
-		c.mu.Lock()
-		delete(c.cache, key)
-		c.mu.Unlock()
-	}()
+	c.scheduleCleanupLocked(key, token)
+}
+
+func (c *PackageNameCache) scheduleCleanupLocked(key string, token uint64) {
+	if c.timers == nil {
+		c.timers = make(map[string]*time.Timer)
+	}
+
+	if existingTimer, exists := c.timers[key]; exists {
+		existingTimer.Stop()
+		delete(c.timers, key)
+	}
+
+	delay := c.ttl + c.cleanupBuffer
+	var timer *time.Timer
+	timer = time.AfterFunc(delay, func() {
+		c.cleanupEntry(key, token, timer)
+	})
+	c.timers[key] = timer
+}
+
+func (c *PackageNameCache) cleanupEntry(key string, token uint64, timer *time.Timer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	currentTimer, exists := c.timers[key]
+	if !exists || currentTimer != timer {
+		return
+	}
+
+	cached, exists := c.cache[key]
+	if !exists || cached.token != token {
+		return
+	}
+
+	delete(c.cache, key)
+	delete(c.timers, key)
 }
 
 // InvalidateAll clears all cached package names (useful after name mismatch resolution)
 func (c *PackageNameCache) InvalidateAll() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	for _, timer := range c.timers {
+		if timer != nil {
+			timer.Stop()
+		}
+	}
 	c.cache = make(map[string]cachedPackageName)
+	c.timers = make(map[string]*time.Timer)
 }
 
 // FetchPackageNameFromGit fetches the actual package name from a git repository's pubspec.yaml
