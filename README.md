@@ -25,11 +25,10 @@ flutter-pm
 ## 🌟 Key Features
 
 ### 🚀 **High-Performance Architecture**
-- **3-4x faster** project discovery with concurrent scanning
-- **10-100x faster** GitHub API calls with intelligent caching  
-- **5-20x faster** git operations with smart caching
-- **30-50% faster** UI rendering with optimized string builders
-- **50-100x faster** stale dependency checking with TTL cache
+- **Concurrent project discovery** for fast scanning across directories
+- **Direct CLI integration** with git, gh, and dart/flutter for reliable operations
+- **Optimized UI rendering** with pre-allocated string builders
+- **No stale caches** — every operation uses fresh data for correctness
 
 ### 🎮 **Beautiful Terminal Interface**
 - **Interactive TUI** with smooth animations and progress indicators
@@ -38,7 +37,8 @@ flutter-pm
 - **Keyboard shortcuts** for power users (1-6 for direct selection)
 
 ### 🤖 **Smart Features**
-- **AI-powered code analysis** that detects Flutter patterns and suggests high-quality packages
+- **Automatic name mismatch resolution** — detects and fixes stale package name entries in pubspec.yaml
+- **Intelligent conflict resolution** — handles version conflicts, git-vs-hosted conflicts, and more
 - **Express Git updates** for existing dependencies
 - **Nuclear cache clearing** (remove pubspec.lock + clear pub cache)
 - **Auto-timeout menu** (60 seconds) with default selection
@@ -59,7 +59,7 @@ flutter-pm
 ### 🔐 **Seamless Integration**
 - **GitHub CLI integration**: Automatic authentication and repository access
 - **Cross-platform**: Works on Linux, macOS, and Windows
-- **Git support**: Full git operations with caching and optimization
+- **Git support**: Full git operations with robust error recovery
 
 ## 🎮 Interactive Interface
 
@@ -162,35 +162,48 @@ Access the configuration menu (option 3) to customize:
 - **Git** (https://git-scm.com/)
 - **GitHub CLI** (automatically installed if missing)
 
-## 📊 Performance Benchmarks
+## 📊 Performance
 
 The Go edition includes built-in performance benchmarking:
 
 ```bash
-flutter-pm --benchmark
+go test -bench=. ./internal/core/
 ```
-
-### Typical Performance Improvements
-- **Project Discovery**: 3-4x faster than shell version
-- **GitHub API**: 10-100x faster with caching
-- **Git Operations**: 5-20x faster with smart caching
-- **Overall Responsiveness**: 30-50% faster UI interactions
 
 ## 🔄 Migration from Shell Version
 
-The Go edition maintains **100% behavioral compatibility** with the original shell script while providing significant performance improvements. All menu options, keyboard shortcuts, and workflows remain identical.
+The Go edition maintains **100% behavioral compatibility** with the original shell script while providing significant improvements. All menu options, keyboard shortcuts, and workflows remain identical.
 
 ### Key Advantages Over Shell Version
-- ✅ **Much faster execution** (3-100x improvements)
-- ✅ **Better error handling** and recovery
-- ✅ **Cross-platform consistency** 
+- ✅ **Smart error recovery** — automatically fixes name mismatches, version conflicts, and more
+- ✅ **Better error handling** with detailed diagnostics
+- ✅ **Cross-platform consistency**
 - ✅ **Beautiful progress indicators**
-- ✅ **Intelligent caching** for all operations
+- ✅ **Concurrent operations** for faster scanning
 - ✅ **Self-update capability**
 
 ## 🐛 Troubleshooting
 
 ### Common Issues
+
+**"name" field doesn't match expected name**
+
+This is the most common error when adding git dependencies. It means an existing dependency in your `pubspec.yaml` has a package name that doesn't match the actual name in the repo's pubspec.yaml (e.g., the repo was renamed). Flutter Package Manager **automatically detects and fixes this**:
+
+1. Scans all git dependencies in your local pubspec.yaml
+2. Fetches the actual package name from each GitHub repo
+3. Fixes any mismatches (creates a backup first)
+4. Repairs the dart pub cache
+5. Retries the operation
+
+If you encounter this outside the tool, fix it manually:
+```bash
+# Clear the stale dart pub cache
+dart pub cache repair
+
+# Or nuclear option
+dart pub cache clean --force
+```
 
 **"No Flutter projects found"**
 ```bash

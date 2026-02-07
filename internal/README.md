@@ -35,6 +35,8 @@ The core package contains all business logic and shell script parity implementat
 - **`pub.go`** - Dart/Flutter Pub Command Integration and pubspec.yaml Management
   - FindPubTool: Auto-detect available dart/flutter commands (shell script parity)
   - AddGitDependency: Add git dependencies using pub commands (not direct YAML editing)
+  - **Name mismatch resolution**: Detects stale package name entries, fetches correct names from GitHub, auto-fixes pubspec.yaml
+  - **Conflict resolution**: Handles version conflicts, git-vs-hosted conflicts, SDK constraints, and more
   - Sync: Execute pub get/flutter packages get operations
   - CreateBackup: Safe backup creation before modifying pubspec.yaml
   - Cross-platform pub command execution with proper error handling
@@ -42,10 +44,11 @@ The core package contains all business logic and shell script parity implementat
 ### Git Operations
 - **`git.go`** - Git Operations and GitHub CLI Integration
   - GitHub CLI integration for repository listing and authentication
+  - FetchPackageNameFromGit: Robust 4-tier fallback chain (gh api -> HTTP -> alt branches -> repo name)
   - Git clone operations with proper error handling and conflict resolution
   - Git version checking and command availability validation
-  - Concurrent Git operations with timeout management
   - SHA-based comparison for precise dependency staleness detection
+  - **No caching**: All operations call CLI tools directly for correctness
 
 ### Dependency Management
 - **`stale.go`** - Stale Dependency Detection and Express Update Functionality
@@ -64,11 +67,11 @@ The core package contains all business logic and shell script parity implementat
   - Security and best practice recommendations
 
 ### Performance
-- **`benchmark.go`** - Performance Benchmarking and Optimization Analysis
-  - BenchmarkOperation: Measure execution time and memory usage of operations
-  - Memory usage tracking and garbage collection analysis
-  - Performance comparison reporting between shell script and Go implementation
-  - Operation profiling for TUI responsiveness optimization
+- **`benchmark_test.go`** - Go standard benchmark suite for performance regression detection
+  - Project discovery benchmarks
+  - GitHub API and Git operation benchmarks
+  - String builder and UI rendering benchmarks
+  - Memory pool usage benchmarks
 
 ## TUI Package (`internal/tui/`)
 
@@ -93,18 +96,28 @@ The TUI package contains Terminal User Interface implementations using BubbleTea
 
 ```
 internal/
-├── core/           # Business Logic (Shell Script Parity)
-│   ├── env.go      # Configuration & Logging
-│   ├── types.go    # Data Structures
-│   ├── discovery.go # Project Detection
-│   ├── pub.go      # Dart/Flutter Integration
-│   ├── git.go      # Git & GitHub Operations
-│   ├── stale.go    # Dependency Management
-│   ├── reco.go     # Smart Recommendations
-│   └── benchmark.go # Performance Measurement
-└── tui/            # Terminal User Interface
-    ├── parity_model.go     # ACTIVE: Shell Script Parity TUI
-    └── bubbletea_model.go  # LEGACY: Original TUI (deprecated)
+├── core/                # Business Logic (Shell Script Parity)
+│   ├── env.go           # Configuration & Logging
+│   ├── types.go         # Data Structures
+│   ├── discovery.go     # Project Detection
+│   ├── pub.go           # Dart/Flutter Integration + Conflict Resolution
+│   ├── git.go           # Git & GitHub Operations
+│   ├── stale.go         # Dependency Management
+│   ├── reco.go          # Smart Recommendations
+│   └── benchmark_test.go # Performance Benchmarks
+└── tui/                 # Terminal User Interface
+    └── models/          # Screen models (bubbletea)
+        ├── app_model.go                              # Main coordinator
+        ├── main_menu_model.go                        # Main menu
+        ├── github_source_repo_selection_model.go     # GitHub loading
+        ├── github_package_repo_multiselection_model.go # Dual-mode select
+        ├── source_config_model.go                    # Source project config
+        ├── configuration_model.go                    # Package config
+        ├── confirmation_model.go                     # Review changes
+        ├── execution_model.go                        # Execute commands
+        ├── conflict_resolver_model.go                # Resolve conflicts
+        ├── results_model.go                          # Show results
+        └── search_config_model.go                    # Search settings
 ```
 
 ## Key Design Principles
