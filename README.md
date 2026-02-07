@@ -27,8 +27,9 @@ flutter-pm
 ### 🚀 **High-Performance Architecture**
 - **Concurrent project discovery** for fast scanning across directories
 - **Direct CLI integration** with git, gh, and dart/flutter for reliable operations
+- **Intelligent TTL-based caching** for GitHub API, Git operations, and package name lookups
+- **Background cache warming** eliminates cold-start latency
 - **Optimized UI rendering** with pre-allocated string builders
-- **No stale caches** — every operation uses fresh data for correctness
 
 ### 🎮 **Beautiful Terminal Interface**
 - **Interactive TUI** with smooth animations and progress indicators

@@ -21,19 +21,48 @@ package core
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
-// GitLsRemote gets the SHA for a specific ref from a git repository
+// GitLsRemoteCache provides caching for git ls-remote operations
+type GitLsRemoteCache struct {
+	mu     sync.RWMutex
+	cache  map[string]string      // URL+ref -> SHA
+	timers map[string]*time.Timer // Track cleanup timers to prevent races
+	ttl    time.Duration
+}
+
+var (
+	gitLsRemoteCache = &GitLsRemoteCache{
+		cache:  make(map[string]string),
+		timers: make(map[string]*time.Timer),
+		ttl:    2 * time.Minute, // Cache git ls-remote for 2 minutes
+	}
+)
+
+// GitLsRemote gets the SHA for a specific ref from a git repository with caching
 func GitLsRemote(url, ref string) (string, error) {
+	cacheKey := url + "#" + ref
+
+	// Try cache first
+	gitLsRemoteCache.mu.RLock()
+	if cached, exists := gitLsRemoteCache.cache[cacheKey]; exists {
+		gitLsRemoteCache.mu.RUnlock()
+		return cached, nil
+	}
+	gitLsRemoteCache.mu.RUnlock()
+
 	cmd := exec.Command("git", "ls-remote", url, ref)
 	output, err := cmd.Output()
 	if err != nil {
@@ -44,7 +73,16 @@ func GitLsRemote(url, ref string) (string, error) {
 	for _, line := range lines {
 		parts := strings.Fields(line)
 		if len(parts) >= 2 && (parts[1] == ref || parts[1] == "refs/heads/"+ref || parts[1] == "refs/tags/"+ref) {
-			return parts[0], nil
+			sha := parts[0]
+			// Cache the result
+			gitLsRemoteCache.mu.Lock()
+			gitLsRemoteCache.cache[cacheKey] = sha
+			gitLsRemoteCache.mu.Unlock()
+
+			// Start cleanup timer if this is the first entry
+			go gitLsRemoteCache.cleanupAfterTTL(cacheKey)
+
+			return sha, nil
 		}
 	}
 
@@ -103,9 +141,30 @@ type GitHubRepo struct {
 	} `json:"owner"`
 }
 
-// ListGitHubRepos uses gh CLI to list user repositories
-// This mirrors the shell script's GitHub integration
+// GitHubCache provides intelligent caching for GitHub API responses
+type GitHubCache struct {
+	mu     sync.RWMutex
+	repos  []RepoCandidate
+	expiry time.Time
+	hash   string
+	ttl    time.Duration
+}
+
+var (
+	githubCache = &GitHubCache{
+		ttl: 5 * time.Minute, // Cache for 5 minutes
+	}
+)
+
+// ListGitHubRepos uses gh CLI to list user repositories with intelligent caching
+// This mirrors the shell script's GitHub integration but optimized for performance
 func ListGitHubRepos(logger *Logger) ([]RepoCandidate, error) {
+	// Check cache first
+	if cached := githubCache.Get(); cached != nil {
+		logger.Info("github", "Using cached repository list")
+		return cached, nil
+	}
+
 	// Check if gh is available
 	if _, err := exec.LookPath("gh"); err != nil {
 		return nil, fmt.Errorf("GitHub CLI (gh) not found. Please install: https://cli.github.com/")
@@ -119,10 +178,10 @@ func ListGitHubRepos(logger *Logger) ([]RepoCandidate, error) {
 
 	logger.Info("github", "Fetching repositories from GitHub")
 
-	// Get repositories as JSON
+	// Get repositories as JSON with increased limit for better UX
 	cmd = exec.Command("gh", "repo", "list",
 		"--json", "name,nameWithOwner,description,isPrivate,url,sshUrl,owner",
-		"--limit", "200")
+		"--limit", "200") // Increased from 100 for better coverage
 
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -136,7 +195,7 @@ func ListGitHubRepos(logger *Logger) ([]RepoCandidate, error) {
 		return nil, fmt.Errorf("failed to parse repository JSON: %w", err)
 	}
 
-	// Transform repos to candidates
+	// Transform repos to candidates efficiently
 	candidates := make([]RepoCandidate, 0, len(repos))
 	for _, repo := range repos {
 		privacy := "public"
@@ -159,8 +218,78 @@ func ListGitHubRepos(logger *Logger) ([]RepoCandidate, error) {
 		})
 	}
 
+	// Cache the results
+	githubCache.Set(candidates)
+
 	logger.Info("github", fmt.Sprintf("Found %d repositories", len(candidates)))
 	return candidates, nil
+}
+
+// Get returns cached repositories if still valid
+func (c *GitHubCache) Get() []RepoCandidate {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if time.Now().Before(c.expiry) && len(
+
+		c.repos) > 0 {
+		return c.repos
+	}
+
+	return nil
+}
+
+// Set caches the repositories with expiry
+func (c *GitHubCache) Set(repos []RepoCandidate) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.repos = repos
+	c.expiry = time.Now().Add(c.ttl)
+
+	// Generate hash for cache invalidation if needed
+	h := sha256.New()
+	for _, repo := range repos {
+		h.Write([]byte(repo.URL + repo.Name))
+	}
+	c.hash = hex.EncodeToString(h.Sum(nil))
+}
+
+// InvalidateCache clears the cache
+func (c *GitHubCache) InvalidateCache() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.repos = nil
+	c.expiry = time.Time{}
+}
+
+// GetRepoBranches gets available branches for a repository with caching
+
+// GetRepoTags gets available tags for a repository with caching
+
+// cleanupAfterTTL removes cache entry after TTL expires with proper race condition handling
+func (c *GitLsRemoteCache) cleanupAfterTTL(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Cancel existing timer if present to prevent race
+	if existingTimer, exists := c.timers[key]; exists {
+		existingTimer.Stop()
+		delete(c.timers, key) // Remove immediately to prevent double cleanup
+	}
+
+	// Set new cleanup timer with proper synchronization
+	c.timers[key] = time.AfterFunc(c.ttl, func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		// Double-check that this timer is still the current one
+		if timer, exists := c.timers[key]; exists && timer != nil {
+			delete(c.cache, key)
+			delete(c.timers, key)
+		}
+	})
 }
 
 // GetGitVersion returns the git version string
@@ -184,19 +313,88 @@ type GitHubPackageNameResult struct {
 	} `json:"textMatches"`
 }
 
+// PackageNameCache provides caching for FetchPackageNameFromGit results
+// Package names rarely change, so we cache them for 15 minutes to speed up
+// repeated lookups during configuration and name mismatch resolution
+type PackageNameCache struct {
+	mu    sync.RWMutex
+	cache map[string]cachedPackageName
+	ttl   time.Duration
+}
+
+type cachedPackageName struct {
+	name   string
+	expiry time.Time
+}
+
+var (
+	packageNameCache = &PackageNameCache{
+		cache: make(map[string]cachedPackageName),
+		ttl:   15 * time.Minute, // Package names rarely change
+	}
+)
+
+// Get returns cached package name if still valid
+func (c *PackageNameCache) Get(key string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	cached, exists := c.cache[key]
+	if !exists || time.Now().After(cached.expiry) {
+		return "", false
+	}
+	return cached.name, true
+}
+
+// Set caches a package name with expiry
+func (c *PackageNameCache) Set(key, name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.cache[key] = cachedPackageName{
+		name:   name,
+		expiry: time.Now().Add(c.ttl),
+	}
+
+	// Start cleanup timer
+	go func() {
+		time.Sleep(c.ttl + time.Minute)
+		c.mu.Lock()
+		delete(c.cache, key)
+		c.mu.Unlock()
+	}()
+}
+
+// InvalidateAll clears all cached package names (useful after name mismatch resolution)
+func (c *PackageNameCache) InvalidateAll() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cache = make(map[string]cachedPackageName)
+}
+
 // FetchPackageNameFromGit fetches the actual package name from a git repository's pubspec.yaml
 // This is critical because the repository name may not match the package name declared in pubspec.yaml
 // For example: repo "my_awesome_repo" might contain package "my_package"
 //
 // Uses a fallback chain for maximum robustness:
-// 1. Primary: GitHub CLI API (works for public and private repos if authenticated)
-// 2. Fallback 1: Direct HTTP GET from raw.githubusercontent.com (public repos only)
-// 3. Fallback 2: Try alternative branch names (main, master, develop)
-// 4. Final fallback: Use repository name as package name
+// 1. Check cache first (15-min TTL)
+// 2. Primary: GitHub CLI API (works for public and private repos if authenticated)
+// 3. Fallback 1: Direct HTTP GET from raw.githubusercontent.com (public repos only)
+// 4. Fallback 2: Try alternative branch names (main, master, develop)
+// 5. Final fallback: Use repository name as package name
 func FetchPackageNameFromGit(logger *Logger, gitURL string, ref string, subdir string) (string, error) {
 	// Only supports GitHub repos
 	if !strings.Contains(gitURL, "github.com") {
 		return "", fmt.Errorf("non-GitHub repos not yet supported for automatic name detection")
+	}
+
+	// Build cache key from URL + subdir (ref doesn't affect package name)
+	cacheKey := gitURL + "#" + subdir
+
+	// Check cache first
+	if cached, ok := packageNameCache.Get(cacheKey); ok {
+		logger.Debug("git", fmt.Sprintf("Using cached package name for %s: %s", gitURL, cached))
+		return cached, nil
 	}
 
 	// Extract owner/repo from URL
@@ -229,6 +427,7 @@ func FetchPackageNameFromGit(logger *Logger, gitURL string, ref string, subdir s
 	// METHOD 1: Try gh api (best method - works for public and private repos)
 	if packageName, err := fetchPackageNameViaGhAPI(logger, ownerRepo, pubspecPath); err == nil {
 		logger.Info("git", fmt.Sprintf("✓ Found package name via gh api: %s", packageName))
+		packageNameCache.Set(cacheKey, packageName)
 		return packageName, nil
 	} else {
 		logger.Info("git", fmt.Sprintf("✗ gh api method failed: %s", err.Error()))
@@ -237,6 +436,7 @@ func FetchPackageNameFromGit(logger *Logger, gitURL string, ref string, subdir s
 	// METHOD 2: Try raw.githubusercontent.com with specified branch (works for public repos)
 	if packageName, err := fetchPackageNameViaHTTP(logger, ownerRepo, pubspecPath, branch); err == nil {
 		logger.Info("git", fmt.Sprintf("✓ Found package name via HTTP (branch: %s): %s", branch, packageName))
+		packageNameCache.Set(cacheKey, packageName)
 		return packageName, nil
 	} else {
 		logger.Info("git", fmt.Sprintf("✗ HTTP method failed for branch '%s': %s", branch, err.Error()))
@@ -250,11 +450,12 @@ func FetchPackageNameFromGit(logger *Logger, gitURL string, ref string, subdir s
 		}
 		if packageName, err := fetchPackageNameViaHTTP(logger, ownerRepo, pubspecPath, altBranch); err == nil {
 			logger.Info("git", fmt.Sprintf("✓ Found package name via HTTP (alternative branch: %s): %s", altBranch, packageName))
+			packageNameCache.Set(cacheKey, packageName)
 			return packageName, nil
 		}
 	}
 
-	// METHOD 4: Final fallback - use repository name
+	// METHOD 4: Final fallback - use repository name (don't cache fallback results)
 	repoName := ownerRepo
 	if slashIdx := strings.LastIndex(ownerRepo, "/"); slashIdx != -1 {
 		repoName = ownerRepo[slashIdx+1:]

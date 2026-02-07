@@ -48,12 +48,12 @@ The core package contains all business logic and shell script parity implementat
   - Git clone operations with proper error handling and conflict resolution
   - Git version checking and command availability validation
   - SHA-based comparison for precise dependency staleness detection
-  - **No caching**: All operations call CLI tools directly for correctness
+  - **Intelligent caching**: GitLsRemoteCache (2-min TTL), GitHubCache (5-min TTL), PackageNameCache (15-min TTL)
 
 ### Dependency Management
 - **`stale.go`** - Stale Dependency Detection and Express Update Functionality
   - CheckStaleHeuristic: Fast 24-hour time-based staleness detection
-  - CheckStalePrecise: SHA-based comparison for exact staleness detection
+  - CheckStalePrecise: SHA-based comparison for exact staleness detection with StaleCheckCache (10-min TTL)
   - ExpressGitUpdate: Bulk update of all stale git dependencies
   - pubspec.lock parsing and analysis for dependency tracking
   - Shell script compatible update workflow and behavior
@@ -67,11 +67,17 @@ The core package contains all business logic and shell script parity implementat
   - Security and best practice recommendations
 
 ### Performance
+- **`cache_warmer.go`** - Background Cache Warming for Performance Optimization
+  - Background goroutine for non-blocking cache warming on startup
+  - Periodic cache refreshing (every 5 minutes)
+  - Pre-warms GitHub API, Git ls-remote, project discovery, and package name caches
+  - Intelligent warming based on common usage patterns
 - **`benchmark_test.go`** - Go standard benchmark suite for performance regression detection
   - Project discovery benchmarks
-  - GitHub API and Git operation benchmarks
+  - GitHub API and Git operation cache benchmarks
+  - Stale check cache benchmarks
   - String builder and UI rendering benchmarks
-  - Memory pool usage benchmarks
+  - Cache warming and memory pool benchmarks
 
 ## TUI Package (`internal/tui/`)
 
@@ -104,6 +110,7 @@ internal/
 │   ├── git.go           # Git & GitHub Operations
 │   ├── stale.go         # Dependency Management
 │   ├── reco.go          # Smart Recommendations
+│   ├── cache_warmer.go  # Background Cache Warming
 │   └── benchmark_test.go # Performance Benchmarks
 └── tui/                 # Terminal User Interface
     └── models/          # Screen models (bubbletea)

@@ -794,6 +794,9 @@ func fixLocalPubspecNameMismatches(logger *Logger, projectPath string) int {
 			return 0
 		}
 		logger.Info("pub", fmt.Sprintf("✅ Updated pubspec.yaml with %d name corrections", fixCount))
+
+		// Invalidate package name cache since names were corrected
+		packageNameCache.InvalidateAll()
 	}
 
 	return fixCount

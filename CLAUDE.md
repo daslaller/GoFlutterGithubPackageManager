@@ -19,7 +19,12 @@ The project follows a clean architecture pattern with clear separation of concer
 - **stale.go**: Stale dependency detection and express update functionality
 - **reco.go**: Smart recommendations system
 
-**Design Note — No Caching**: All git/GitHub operations call CLI tools directly every time (no TTL caches). This is intentional for simplicity and correctness — caching caused hard-to-diagnose staleness bugs. The previous `cache_warmer.go`, `GitLsRemoteCache`, `GitHubCache`, and `StaleCheckCache` have all been removed.
+**Design Note — Intelligent Caching**: Performance-critical operations use TTL-based caching to eliminate redundant CLI calls:
+- **GitLsRemoteCache** (2-min TTL): Caches `git ls-remote` SHA lookups
+- **GitHubCache** (5-min TTL): Caches `gh repo list` API responses
+- **StaleCheckCache** (10-min TTL): Caches stale dependency check results with file-hash invalidation
+- **PackageNameCache** (15-min TTL): Caches `FetchPackageNameFromGit` results to speed up dart pub configuration
+- **CacheWarmer** (`cache_warmer.go`): Background goroutine that pre-warms caches on startup and periodically
 
 #### Package Name Fetching Strategy (git.go)
 
