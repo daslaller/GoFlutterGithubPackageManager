@@ -14,10 +14,17 @@ The project follows a clean architecture pattern with clear separation of concer
 - **env.go**: Configuration, logging, and environment variable parsing
 - **types.go**: Data structures and type definitions
 - **discovery.go**: Project and repository discovery logic (matches shell script behavior)
-- **pub.go**: Dart/Flutter pub command integration and pubspec.yaml management
+- **pub.go**: Dart/Flutter pub command integration, pubspec.yaml management, and intelligent conflict resolution (including name mismatch auto-fix)
 - **git.go**: Git operations and GitHub CLI integration with robust package name fetching fallback chain
 - **stale.go**: Stale dependency detection and express update functionality
 - **reco.go**: Smart recommendations system
+
+**Design Note — Intelligent Caching**: Performance-critical operations use TTL-based caching to eliminate redundant CLI calls:
+- **GitLsRemoteCache** (2-min TTL): Caches `git ls-remote` SHA lookups
+- **GitHubCache** (5-min TTL): Caches `gh repo list` API responses
+- **StaleCheckCache** (10-min TTL): Caches stale dependency check results with file-hash invalidation
+- **PackageNameCache** (15-min TTL): Caches `FetchPackageNameFromGit` results to speed up dart pub configuration; cleanup timers are tracked and guarded to prevent stale deletions after `InvalidateAll`
+- **CacheWarmer** (`cache_warmer.go`): Background goroutine that pre-warms caches on startup and periodically
 
 #### Package Name Fetching Strategy (git.go)
 
@@ -40,7 +47,7 @@ The `FetchPackageNameFromGit` function uses a robust fallback chain to fetch the
 
 4. **Final Fallback**: Repository name
    - If all methods fail, uses the repository name as the package name
-   - Ensures the operation can continue even if package name can't be determined
+   - Returns an error to mark the name as **unverified** (callers must not rewrite pubspec.yaml based on it)
 
 **YAML Parsing**: Uses `gopkg.in/yaml.v3` for robust YAML parsing, avoiding fragile regex-based parsing. The parser extracts only the `name:` field from pubspec.yaml content.
 
@@ -82,34 +89,73 @@ dart pub add package --git-url https://github.com/owner/repo.git  ❌
 - Calls dart/flutter directly (not through cmd.exe) to avoid quote escaping issues
 - The exact command string is passed to the Windows process, which then parses it using its own rules
 
+#### Package Name Mismatch Resolution (pub.go) — CRITICAL
+
+The most common and hardest-to-diagnose error is: `"name" field doesn't match expected name "X"`.
+
+**This error has TWO root causes:**
+
+1. **LOCAL PUBSPEC IS WRONG** (most common): An existing git dependency in the local `pubspec.yaml` has the wrong package name key. Example:
+   ```yaml
+   pbx_gui:                    # <-- local pubspec uses "pbx_gui"
+       git:
+         url: https://github.com/user/loginAppFirestoreGui.git  # <-- but repo has name: loginApp
+   ```
+   This happens when repos are renamed but local pubspecs aren't updated. When you try to add ANY new git dependency, `dart pub` re-validates ALL existing deps and fails on the stale entry.
+
+2. **STALE PUB CACHE**: dart pub's local git cache (`~/.pub-cache/git/` or `%LOCALAPPDATA%\Pub\Cache\git\`) has an old clone with a renamed `pubspec.yaml`.
+
+**Resolution strategy in `resolveNameMismatch` (4-step):**
+1. **Fix local pubspec** (`fixLocalPubspecNameMismatches`): Scans ALL git deps in local pubspec.yaml, fetches actual package names from GitHub via `FetchPackageNameFromGit`, fixes any mismatches. Creates backup first.
+2. **Cache repair**: Runs `dart pub cache repair` to reset stale git clones
+3. **Retry**: Retries the original `dart pub add` command
+4. **Nuclear fallback**: `dart pub cache clean --force` + final retry
+
+**Key functions:**
+- `analyzeDependencyConflict()`: Detects the name mismatch pattern in error output
+- `extractNameMismatchDetails()`: Parses expected/actual names from the dart error message
+- `fixLocalPubspecNameMismatches()`: Scans local pubspec, fetches real names, fixes entries
+- `resolveNameMismatch()`: Orchestrates the full 4-step resolution
+- `retryPubAddWithoutConflictResolution()`: Retries without entering conflict resolution (prevents infinite recursion)
+
+**Resolution metadata is source-of-truth:** `AddGitDependency` must preserve the `ActionResult.Data` fields set by resolution functions (especially `resolution_method` and `pubspec_fixes_applied`) and should only fill missing fields. Do not overwrite name-mismatch metadata with inline override defaults.
+
 #### Dependency Conflict Resolution (pub.go)
 
 The `AddGitDependency` function includes intelligent dependency conflict detection and resolution for exit code 65 errors. After solving name mismatch issues, remaining exit code 65 errors are legitimate dependency conflicts that require smart handling.
 
 **Conflict Types Detected:**
-1. **Version Conflicts**: Package A requires dependency X ^1.0.0, Package B requires X ^2.0.0
+1. **Name Mismatch**: Local pubspec has wrong package name key or stale pub cache
+   - **Resolution**: Fix local pubspec entry, repair/clean pub cache, retry
+   - **Recoverable**: ✅ Yes
+
+2. **Version Conflicts**: Package A requires dependency X ^1.0.0, Package B requires X ^2.0.0
    - **Resolution**: Runs `pub get` to attempt automatic version resolution, then retries package addition
    - **Recoverable**: ✅ Yes
 
-2. **SDK Constraint Violations**: Package requires newer Dart/Flutter SDK than project supports
+3. **SDK Constraint Violations**: Package requires newer Dart/Flutter SDK than project supports
    - **Resolution**: None - requires manual SDK update or package version change
    - **Recoverable**: ❌ No
 
-3. **Platform Incompatibilities**: Package only supports specific platforms (web, mobile, etc.)
+4. **Platform Incompatibilities**: Package only supports specific platforms (web, mobile, etc.)
    - **Resolution**: None - requires choosing platform-compatible packages
    - **Recoverable**: ❌ No
 
-4. **Circular Dependencies**: Package A depends on Package B, Package B depends on Package A
+5. **Circular Dependencies**: Package A depends on Package B, Package B depends on Package A
    - **Resolution**: None - requires removing circular dependency
    - **Recoverable**: ❌ No
 
-5. **Transitive Conflicts**: Deep dependency chains with incompatible versions
+6. **Transitive Conflicts**: Deep dependency chains with incompatible versions
    - **Resolution**: Runs `pub get` with dependency overrides, then retries
+   - **Recoverable**: ✅ Yes
+
+7. **Git vs Hosted Conflicts**: Same package required from both git and pub.dev
+   - **Resolution**: Inline dependency overrides to force git source
    - **Recoverable**: ✅ Yes
 
 **Error Analysis**: The system analyzes pub command output using pattern matching to identify specific conflict types and provides meaningful error messages with suggested fixes.
 
-**Automatic Recovery**: For recoverable conflicts (version and transitive), the system automatically attempts resolution by running `pub get` and retrying the package addition without conflict resolution to avoid infinite recursion.
+**Automatic Recovery**: For recoverable conflicts, the system automatically attempts resolution. Name mismatches get the full 4-step treatment. Version/transitive/git-vs-hosted conflicts use inline dependency overrides.
 
 ### TUI Interface (`internal/tui/models/`)
 
@@ -316,6 +362,9 @@ go test ./...
 go test ./internal/core
 go test ./internal/tui
 
+# Cache invalidation safety
+go test ./internal/core -run TestPackageNameCacheInvalidateAllPreventsOldCleanup
+
 # Run with coverage
 go test -cover ./...
 ```
@@ -355,6 +404,9 @@ go run scripts/run_terminal_tests.go
 - Tests save actual terminal frames to files for manual inspection
 - Critical tests verify option 3 shows search configuration, not package configuration
 - Use `go test -v ./internal/tui/testing` to run all TUI validation tests
+- When touching package-name resolution, simulate a fetch failure and confirm
+  `fixLocalPubspecNameMismatches` does not rewrite dependency keys.
+- When changing conflict resolution metadata, verify `ActionResult.Data` preserves resolver `resolution_method` (name mismatch vs inline override) via a targeted unit test or a manual run with a known name mismatch case.
 
 ### Integration Testing
 The application includes integration with the shell scripts:

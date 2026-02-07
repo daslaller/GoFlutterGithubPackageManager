@@ -35,6 +35,8 @@ The core package contains all business logic and shell script parity implementat
 - **`pub.go`** - Dart/Flutter Pub Command Integration and pubspec.yaml Management
   - FindPubTool: Auto-detect available dart/flutter commands (shell script parity)
   - AddGitDependency: Add git dependencies using pub commands (not direct YAML editing)
+  - **Name mismatch resolution**: Detects stale package name entries, fetches correct names from GitHub, auto-fixes pubspec.yaml
+  - **Conflict resolution**: Handles version conflicts, git-vs-hosted conflicts, SDK constraints, and more
   - Sync: Execute pub get/flutter packages get operations
   - CreateBackup: Safe backup creation before modifying pubspec.yaml
   - Cross-platform pub command execution with proper error handling
@@ -42,15 +44,16 @@ The core package contains all business logic and shell script parity implementat
 ### Git Operations
 - **`git.go`** - Git Operations and GitHub CLI Integration
   - GitHub CLI integration for repository listing and authentication
+  - FetchPackageNameFromGit: Robust 4-tier fallback chain (gh api -> HTTP -> alt branches -> repo name fallback with error)
   - Git clone operations with proper error handling and conflict resolution
   - Git version checking and command availability validation
-  - Concurrent Git operations with timeout management
   - SHA-based comparison for precise dependency staleness detection
+  - **Intelligent caching**: GitLsRemoteCache (2-min TTL), GitHubCache (5-min TTL), PackageNameCache (15-min TTL)
 
 ### Dependency Management
 - **`stale.go`** - Stale Dependency Detection and Express Update Functionality
   - CheckStaleHeuristic: Fast 24-hour time-based staleness detection
-  - CheckStalePrecise: SHA-based comparison for exact staleness detection
+  - CheckStalePrecise: SHA-based comparison for exact staleness detection with StaleCheckCache (10-min TTL)
   - ExpressGitUpdate: Bulk update of all stale git dependencies
   - pubspec.lock parsing and analysis for dependency tracking
   - Shell script compatible update workflow and behavior
@@ -64,11 +67,17 @@ The core package contains all business logic and shell script parity implementat
   - Security and best practice recommendations
 
 ### Performance
-- **`benchmark.go`** - Performance Benchmarking and Optimization Analysis
-  - BenchmarkOperation: Measure execution time and memory usage of operations
-  - Memory usage tracking and garbage collection analysis
-  - Performance comparison reporting between shell script and Go implementation
-  - Operation profiling for TUI responsiveness optimization
+- **`cache_warmer.go`** - Background Cache Warming for Performance Optimization
+  - Background goroutine for non-blocking cache warming on startup
+  - Periodic cache refreshing (every 5 minutes)
+  - Pre-warms GitHub API, Git ls-remote, project discovery, and package name caches
+  - Intelligent warming based on common usage patterns
+- **`benchmark_test.go`** - Go standard benchmark suite for performance regression detection
+  - Project discovery benchmarks
+  - GitHub API and Git operation cache benchmarks
+  - Stale check cache benchmarks
+  - String builder and UI rendering benchmarks
+  - Cache warming and memory pool benchmarks
 
 ## TUI Package (`internal/tui/`)
 
@@ -93,18 +102,29 @@ The TUI package contains Terminal User Interface implementations using BubbleTea
 
 ```
 internal/
-├── core/           # Business Logic (Shell Script Parity)
-│   ├── env.go      # Configuration & Logging
-│   ├── types.go    # Data Structures
-│   ├── discovery.go # Project Detection
-│   ├── pub.go      # Dart/Flutter Integration
-│   ├── git.go      # Git & GitHub Operations
-│   ├── stale.go    # Dependency Management
-│   ├── reco.go     # Smart Recommendations
-│   └── benchmark.go # Performance Measurement
-└── tui/            # Terminal User Interface
-    ├── parity_model.go     # ACTIVE: Shell Script Parity TUI
-    └── bubbletea_model.go  # LEGACY: Original TUI (deprecated)
+├── core/                # Business Logic (Shell Script Parity)
+│   ├── env.go           # Configuration & Logging
+│   ├── types.go         # Data Structures
+│   ├── discovery.go     # Project Detection
+│   ├── pub.go           # Dart/Flutter Integration + Conflict Resolution
+│   ├── git.go           # Git & GitHub Operations
+│   ├── stale.go         # Dependency Management
+│   ├── reco.go          # Smart Recommendations
+│   ├── cache_warmer.go  # Background Cache Warming
+│   └── benchmark_test.go # Performance Benchmarks
+└── tui/                 # Terminal User Interface
+    └── models/          # Screen models (bubbletea)
+        ├── app_model.go                              # Main coordinator
+        ├── main_menu_model.go                        # Main menu
+        ├── github_source_repo_selection_model.go     # GitHub loading
+        ├── github_package_repo_multiselection_model.go # Dual-mode select
+        ├── source_config_model.go                    # Source project config
+        ├── configuration_model.go                    # Package config
+        ├── confirmation_model.go                     # Review changes
+        ├── execution_model.go                        # Execute commands
+        ├── conflict_resolver_model.go                # Resolve conflicts
+        ├── results_model.go                          # Show results
+        └── search_config_model.go                    # Search settings
 ```
 
 ## Key Design Principles

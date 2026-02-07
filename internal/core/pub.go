@@ -232,16 +232,42 @@ func AddGitDependency(logger *Logger, cfg *Config, projectPath string, spec PkgS
 			if autoResolve {
 				// Attempt resolution
 				if resolvedResult := attemptConflictResolution(logger, cfg, projectPath, spec, conflictAnalysis); resolvedResult.OK {
-					// Success - add detailed resolution info to result
-					resolvedResult.Data = map[string]interface{}{
-						"conflict_resolved": true,
-						"conflict_type":     conflictAnalysis.ConflictType,
-						"conflicting_pkg":   conflictAnalysis.ConflictingPkg,
-						"resolution_method": "inline_dependency_override",
-						"user_message":      fmt.Sprintf("Successfully resolved %s conflict with %s", conflictAnalysis.ConflictType, conflictAnalysis.ConflictingPkg),
+					// Success - preserve resolution metadata set by the resolver
+					if resolvedResult.Data == nil {
+						resolvedResult.Data = map[string]interface{}{}
+					}
+					resolutionMethod, _ := resolvedResult.Data["resolution_method"].(string)
+					if resolutionMethod == "" {
+						resolutionMethod = "inline_dependency_override"
+						resolvedResult.Data["resolution_method"] = resolutionMethod
+					}
+					if _, ok := resolvedResult.Data["conflict_type"]; !ok {
+						resolvedResult.Data["conflict_type"] = conflictAnalysis.ConflictType
+					}
+					if _, ok := resolvedResult.Data["conflicting_pkg"]; !ok {
+						resolvedResult.Data["conflicting_pkg"] = conflictAnalysis.ConflictingPkg
+					}
+					resolvedResult.Data["conflict_resolved"] = true
+					if _, ok := resolvedResult.Data["user_message"]; !ok {
+						userMessage := fmt.Sprintf("Successfully resolved %s conflict", conflictAnalysis.ConflictType)
+						if conflictAnalysis.ConflictingPkg != "" {
+							userMessage = fmt.Sprintf("Successfully resolved %s conflict with %s", conflictAnalysis.ConflictType, conflictAnalysis.ConflictingPkg)
+						}
+						resolvedResult.Data["user_message"] = userMessage
 					}
 					logger.Info("pub", fmt.Sprintf("✅ Conflict resolved! %s has been successfully added", actualName))
-					logger.Info("pub", fmt.Sprintf("🛠️  Resolution: Used dependency override for %s", conflictAnalysis.ConflictingPkg))
+					switch resolutionMethod {
+					case "inline_dependency_override":
+						logger.Info("pub", fmt.Sprintf("🛠️  Resolution: Used dependency override for %s", conflictAnalysis.ConflictingPkg))
+					case "pubspec_name_fix":
+						logger.Info("pub", "🛠️  Resolution: Fixed local pubspec name mismatch")
+					case "pub_cache_repair":
+						logger.Info("pub", "🛠️  Resolution: Repaired dart pub cache")
+					case "pub_cache_clean":
+						logger.Info("pub", "🛠️  Resolution: Cleaned dart pub cache")
+					default:
+						logger.Info("pub", fmt.Sprintf("🛠️  Resolution: %s", resolutionMethod))
+					}
 					return resolvedResult
 				}
 
@@ -330,6 +356,35 @@ func analyzeDependencyConflict(output string, err error) ConflictAnalysis {
 
 	// Extract conflicting package name if possible
 	conflictingPkg := extractConflictingPackageName(originalOutput)
+
+	// Name mismatch detection (check first - this is either a stale pub cache or a wrong entry in local pubspec)
+	// Error pattern: "name" field doesn't match expected name "X"
+	// Root cause 1: local pubspec.yaml has a git dependency with the wrong package name key
+	// Root cause 2: dart pub caches git repos locally and uses stale pubspec.yaml
+	if strings.Contains(lowerOutput, "\"name\" field doesn't match expected name") ||
+		strings.Contains(lowerOutput, "name field doesn't match") ||
+		(strings.Contains(lowerOutput, "doesn't match expected name") && strings.Contains(lowerOutput, "name")) {
+
+		// Extract the expected name and actual name from the error message
+		expectedName, actualName := extractNameMismatchDetails(originalOutput)
+
+		analysis := ConflictAnalysis{
+			ConflictType:    "name_mismatch",
+			SubType:         "stale_pub_cache",
+			IsRecoverable:   true,
+			SuggestedFix:    "Fix local pubspec.yaml entry or clear dart pub git cache",
+			UserMessage:     "Package name mismatch - will scan local pubspec and fix automatically",
+			ConflictingPkg:  conflictingPkg,
+			ResolutionSteps: []string{"Scan local pubspec for wrong dependency names", "Fetch correct names from git repos", "Fix pubspec.yaml", "Retry"},
+		}
+
+		// Store the extracted names in SourceConflict for the resolution function
+		if expectedName != "" && actualName != "" {
+			analysis.SourceConflict = fmt.Sprintf("expected=%s,actual=%s", expectedName, actualName)
+		}
+
+		return analysis
+	}
 
 	// SDK constraint violations (check first, as they often include "version solving failed")
 	if (strings.Contains(lowerOutput, "sdk constraint") ||
@@ -438,6 +493,12 @@ func analyzeDependencyConflict(output string, err error) ConflictAnalysis {
 // attemptConflictResolution tries to resolve dependency conflicts automatically with enhanced strategies
 func attemptConflictResolution(logger *Logger, cfg *Config, projectPath string, spec PkgSpec, analysis ConflictAnalysis) ActionResult {
 	logger.Info("pub", fmt.Sprintf("🔧 Starting resolution for %s conflict (subtype: %s)", analysis.ConflictType, analysis.SubType))
+
+	// Name mismatch: try fixing local pubspec first, then cache repair as fallback
+	if analysis.ConflictType == "name_mismatch" {
+		logger.Info("pub", "🔍 Detecting cause of package name mismatch...")
+		return resolveNameMismatch(logger, cfg, projectPath, spec, analysis)
+	}
 
 	// For all recoverable conflicts, try using inline dependency overrides in the dart pub add command
 	if analysis.IsRecoverable && analysis.ConflictingPkg != "" {
@@ -567,8 +628,19 @@ func resolveWithInlineOverride(logger *Logger, cfg *Config, projectPath string, 
 	}
 }
 
-// addGitDependencyWithoutConflictResolution adds a git dependency without conflict resolution (to avoid recursion)
-func addGitDependencyWithoutConflictResolution(logger *Logger, cfg *Config, projectPath string, spec PkgSpec) ActionResult {
+// resolveNameMismatch resolves package name mismatch errors with a multi-step strategy:
+//
+// The error "name field doesn't match expected name" has TWO possible root causes:
+// 1. LOCAL PUBSPEC IS WRONG: An existing git dependency in the local pubspec.yaml has the wrong
+//    package name key (e.g., "pbx_gui:" but the repo's pubspec says "name: loginApp")
+// 2. STALE PUB CACHE: dart pub's local git cache has an old clone with a renamed pubspec.yaml
+//
+// Strategy:
+// Step 1: Scan local pubspec.yaml git deps, fetch actual names from GitHub, fix any mismatches
+// Step 2: Run pub cache repair to reset stale git clones
+// Step 3: Retry the original pub add command
+// Step 4: If still failing, pub cache clean --force as nuclear option + retry
+func resolveNameMismatch(logger *Logger, cfg *Config, projectPath string, spec PkgSpec, analysis ConflictAnalysis) ActionResult {
 	tool, err := FindPubTool()
 	if err != nil {
 		return ActionResult{
@@ -577,53 +649,236 @@ func addGitDependencyWithoutConflictResolution(logger *Logger, cfg *Config, proj
 		}
 	}
 
-	// Use the pre-fetched package name from spec.Name
-	// The package name was already fetched during configuration phase
-	actualName := spec.Name
-	logger.Debug("pub", fmt.Sprintf("Using pre-fetched package name: %s", actualName))
+	var allLogs []string
 
-	// Build command arguments
-	args := []string{"pub", "add", actualName, "--git-url", spec.URL}
-	if spec.Ref != "" && spec.Ref != "main" {
-		args = append(args, "--git-ref", spec.Ref)
+	// ═══ STEP 1: Check if the local pubspec.yaml has wrong dependency names ═══
+	logger.Info("pub", "")
+	logger.Info("pub", "═══ STEP 1: Scanning local pubspec.yaml for name mismatches ═══")
+	fixCount := fixLocalPubspecNameMismatches(logger, projectPath)
+	if fixCount > 0 {
+		allLogs = append(allLogs, fmt.Sprintf("Fixed %d name mismatches in local pubspec.yaml", fixCount))
+		logger.Info("pub", fmt.Sprintf("✅ Fixed %d dependency name mismatches in pubspec.yaml", fixCount))
+	} else {
+		allLogs = append(allLogs, "No local pubspec name mismatches found")
+		logger.Info("pub", "No mismatches found in local pubspec.yaml - issue is likely in pub cache")
 	}
-	if spec.Subdir != "" {
-		args = append(args, "--git-path", spec.Subdir)
+
+	// ═══ STEP 2: Repair pub cache (resets git repos without nuking everything) ═══
+	logger.Info("pub", "")
+	logger.Info("pub", "═══ STEP 2: Running pub cache repair ═══")
+	repairCmd := exec.Command(tool, "pub", "cache", "repair")
+	repairCmd.Dir = projectPath
+	repairCmd.Stdin = nil
+	repairOutput, repairErr := repairCmd.CombinedOutput()
+	repairOutputStr := strings.TrimSpace(string(repairOutput))
+	allLogs = append(allLogs, fmt.Sprintf("Cache repair: %s", repairOutputStr))
+	if repairErr != nil {
+		logger.Info("pub", fmt.Sprintf("Cache repair warning: %s (continuing anyway)", repairErr.Error()))
+	} else {
+		logger.Info("pub", "✅ Dart pub cache repair completed")
 	}
 
-	logger.LogCommand("pub", tool, args)
+	// ═══ STEP 3: Retry the package addition ═══
+	logger.Info("pub", "")
+	logger.Info("pub", "═══ STEP 3: Retrying package addition ═══")
+	retryResult := retryPubAddWithoutConflictResolution(logger, tool, projectPath, spec)
+	allLogs = append(allLogs, retryResult.Logs...)
 
-	if cfg.DryRun {
-		return ActionResult{
-			OK:      true,
-			Message: fmt.Sprintf("Would execute: %s %s", tool, strings.Join(args, " ")),
-			Logs:    []string{fmt.Sprintf("DRY RUN: %s %s", tool, strings.Join(args, " "))},
+	if retryResult.OK {
+		method := "pub_cache_repair"
+		if fixCount > 0 {
+			method = "pubspec_name_fix"
+		}
+		logger.Info("pub", fmt.Sprintf("✅ Package %s successfully added!", spec.Name))
+		retryResult.Data = map[string]interface{}{
+			"conflict_resolved":    true,
+			"conflict_type":        "name_mismatch",
+			"resolution_method":    method,
+			"package_name":         spec.Name,
+			"pubspec_fixes_applied": fixCount,
+		}
+		retryResult.Logs = allLogs
+		return retryResult
+	}
+
+	// ═══ STEP 4: Nuclear option - pub cache clean --force + retry ═══
+	logger.Info("pub", "")
+	logger.Info("pub", "═══ STEP 4: Nuclear option - pub cache clean --force ═══")
+	cleanCmd := exec.Command(tool, "pub", "cache", "clean", "--force")
+	cleanCmd.Dir = projectPath
+	cleanCmd.Stdin = nil
+	cleanOutput, cleanErr := cleanCmd.CombinedOutput()
+	cleanOutputStr := strings.TrimSpace(string(cleanOutput))
+	allLogs = append(allLogs, fmt.Sprintf("Cache clean: %s", cleanOutputStr))
+	if cleanErr != nil {
+		logger.Info("pub", fmt.Sprintf("Cache clean warning: %s (continuing anyway)", cleanErr.Error()))
+	} else {
+		logger.Info("pub", "✅ Dart pub cache cleaned")
+	}
+
+	logger.Info("pub", "🔄 Final retry after cache clean...")
+	finalResult := retryPubAddWithoutConflictResolution(logger, tool, projectPath, spec)
+	allLogs = append(allLogs, finalResult.Logs...)
+
+	if finalResult.OK {
+		logger.Info("pub", fmt.Sprintf("✅ Package %s successfully added after cache clean", spec.Name))
+		finalResult.Data = map[string]interface{}{
+			"conflict_resolved":    true,
+			"conflict_type":        "name_mismatch",
+			"resolution_method":    "pub_cache_clean",
+			"package_name":         spec.Name,
+			"pubspec_fixes_applied": fixCount,
+		}
+		finalResult.Logs = allLogs
+		return finalResult
+	}
+
+	logger.Info("pub", "❌ Name mismatch persists after all resolution attempts - manual intervention required")
+	finalResult.Logs = allLogs
+	return finalResult
+}
+
+// fixLocalPubspecNameMismatches scans the local pubspec.yaml for git dependencies where the
+// dependency key (package name) doesn't match the actual name in the remote repo's pubspec.yaml.
+// For each mismatch found, it updates the local pubspec.yaml to use the correct name.
+// Returns the number of fixes applied.
+func fixLocalPubspecNameMismatches(logger *Logger, projectPath string) int {
+	pubspecPath := filepath.Join(projectPath, "pubspec.yaml")
+
+	// Read the pubspec.yaml
+	content, err := os.ReadFile(pubspecPath)
+	if err != nil {
+		logger.Debug("pub", fmt.Sprintf("Failed to read pubspec.yaml: %s", err))
+		return 0
+	}
+
+	// Parse git dependencies
+	gitDeps, err := ListGitDependencies(projectPath)
+	if err != nil {
+		logger.Debug("pub", fmt.Sprintf("Failed to list git dependencies: %s", err))
+		return 0
+	}
+
+	if len(gitDeps) == 0 {
+		logger.Debug("pub", "No git dependencies found in pubspec.yaml")
+		return 0
+	}
+
+	fixCount := 0
+	modifiedContent := string(content)
+
+	for _, dep := range gitDeps {
+		// Fetch the actual package name from the remote repo
+		logger.Info("pub", fmt.Sprintf("Checking: %s -> %s", dep.Name, dep.URL))
+		actualName, err := FetchPackageNameFromGit(logger, dep.URL, dep.Ref, dep.Subdir)
+		if err != nil {
+			logger.Debug("pub", fmt.Sprintf("Could not fetch name for %s: %s", dep.URL, err))
+			continue
+		}
+
+		// If the local name doesn't match the actual remote name, fix it
+		if actualName != dep.Name {
+			logger.Info("pub", fmt.Sprintf("⚠️  MISMATCH FOUND: local='%s' but repo has name='%s' (URL: %s)", dep.Name, actualName, dep.URL))
+
+			// Replace the dependency key in the pubspec.yaml content
+			// We need to be careful to only replace the dependency key, not other occurrences
+			// The YAML format is:
+			//   old_name:
+			//     git:
+			//       url: ...
+			// We replace "old_name:" at the correct indentation with "new_name:"
+			oldEntry := dep.Name + ":"
+			newEntry := actualName + ":"
+
+			// Use a targeted replacement: look for the dependency key followed by newline + indentation + git:
+			// This avoids replacing other occurrences of the name elsewhere in the file
+			oldPattern := dep.Name + ":\n"
+			newPattern := actualName + ":\n"
+
+			if strings.Contains(modifiedContent, oldPattern) {
+				modifiedContent = strings.Replace(modifiedContent, oldPattern, newPattern, 1)
+				fixCount++
+				logger.Info("pub", fmt.Sprintf("✅ Fixed: '%s' -> '%s'", oldEntry, newEntry))
+			}
+		} else {
+			logger.Debug("pub", fmt.Sprintf("OK: %s matches remote name", dep.Name))
 		}
 	}
 
-	// Execute the command (no conflict resolution on retry)
-	cmd := exec.Command(tool, args...)
+	if fixCount > 0 {
+		// Create backup before modifying
+		backupInfo, backupErr := CreateBackup(projectPath)
+		if backupErr != nil {
+			logger.Info("pub", fmt.Sprintf("Warning: could not create backup: %s", backupErr))
+		} else {
+			logger.Info("pub", fmt.Sprintf("Backup created: %s", backupInfo.BackupPath))
+		}
+
+		// Write the fixed content
+		if err := os.WriteFile(pubspecPath, []byte(modifiedContent), 0644); err != nil {
+			logger.Info("pub", fmt.Sprintf("ERROR: Failed to write fixed pubspec.yaml: %s", err))
+			return 0
+		}
+		logger.Info("pub", fmt.Sprintf("✅ Updated pubspec.yaml with %d name corrections", fixCount))
+
+		// Invalidate package name cache since names were corrected
+		packageNameCache.InvalidateAll()
+	}
+
+	return fixCount
+}
+
+// retryPubAddWithoutConflictResolution retries a pub add command without entering conflict resolution
+// This prevents infinite recursion when resolving name mismatch errors
+func retryPubAddWithoutConflictResolution(logger *Logger, tool string, projectPath string, spec PkgSpec) ActionResult {
+	actualName := spec.Name
+
+	gitSpec := fmt.Sprintf(`{git:{url: %s`, spec.URL)
+	if spec.Ref != "" {
+		gitSpec += fmt.Sprintf(`, ref: %s`, spec.Ref)
+	}
+	if spec.Subdir != "" {
+		gitSpec += fmt.Sprintf(`, path: %s`, spec.Subdir)
+	}
+	gitSpec += fmt.Sprintf(`}, version: any}`)
+
+	packageArg := fmt.Sprintf(`"%s:%s"`, actualName, gitSpec)
+	args := []string{"pub", "add", packageArg}
+
+	cmdParts := []string{tool}
+	cmdParts = append(cmdParts, args...)
+	cmdStr := strings.Join(cmdParts, " ")
+
+	logger.Info("pub", fmt.Sprintf("Executing: %s", cmdStr))
+
+	cmd := exec.Command(tool)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CmdLine: cmdStr,
+	}
 	cmd.Dir = projectPath
 	cmd.Stdin = nil
 
 	output, err := cmd.CombinedOutput()
 	outputStr := strings.TrimSpace(string(output))
-	logs := []string{outputStr}
+	logs := []string{
+		fmt.Sprintf("Command: %s", cmdStr),
+		fmt.Sprintf("Output: %s", outputStr),
+	}
 
 	if err != nil {
-		// No conflict resolution on retry - just return the error
+		logger.Info("pub", fmt.Sprintf("Retry failed: %s", err.Error()))
+		logger.Info("pub", fmt.Sprintf("Output: %s", outputStr))
 		return ActionResult{
 			OK:   false,
-			Err:  fmt.Sprintf("Retry failed: %s", err.Error()),
+			Err:  fmt.Sprintf("Name mismatch persists: %s", err.Error()),
 			Logs: logs,
 		}
 	}
 
-	// Wait for file locks and return success
 	time.Sleep(500 * time.Millisecond)
 	return ActionResult{
 		OK:      true,
-		Message: fmt.Sprintf("Successfully added %s", actualName),
+		Message: fmt.Sprintf("Successfully added %s after cache reset", actualName),
 		Logs:    logs,
 	}
 }
@@ -784,6 +1039,25 @@ func ListGitDependencies(projectPath string) ([]PkgSpec, error) {
 	}
 
 	return deps, nil
+}
+
+// extractNameMismatchDetails extracts the expected and actual package names from a name mismatch error
+// Error format: "name" field doesn't match expected name "pbx_gui".\n...\nname: loginApp
+func extractNameMismatchDetails(output string) (expectedName, actualName string) {
+	// Extract expected name: "name" field doesn't match expected name "EXPECTED"
+	expectedRe := regexp.MustCompile(`doesn't match expected name "(\w+)"`)
+	if matches := expectedRe.FindStringSubmatch(output); len(matches) > 1 {
+		expectedName = matches[1]
+	}
+
+	// Extract actual name: name: ACTUAL (from the error output snippet)
+	// The error output includes the offending line like: "1 │ name: loginApp"
+	actualRe := regexp.MustCompile(`name:\s+(\w+)`)
+	if matches := actualRe.FindStringSubmatch(output); len(matches) > 1 {
+		actualName = matches[1]
+	}
+
+	return expectedName, actualName
 }
 
 // extractConflictingPackageName attempts to extract the conflicting package name from error output

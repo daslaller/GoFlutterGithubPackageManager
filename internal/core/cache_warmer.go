@@ -247,11 +247,14 @@ func (cw *CacheWarmer) warmPopularGitRepos(ctx context.Context) {
 
 		repo := repos[i]
 
-		// Try main branch
+		// Try main branch SHA
 		_, err := GitLsRemote(repo.URL, "main")
 		if err == nil {
 			cw.logger.Debug("cache-warmer", "Warmed "+repo.Name+"#main")
 		}
+
+		// Also warm package name cache (speeds up dart pub configuration)
+		_, _ = FetchPackageNameFromGit(cw.logger, repo.URL, "main", "")
 
 		// Small delay to avoid rate limiting
 		time.Sleep(200 * time.Millisecond)
